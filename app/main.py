@@ -265,6 +265,13 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
         snapshot = review_key(req.key)
         target = DOCS_PREFIX + req.key.removeprefix(PENDING_PREFIX)
         try:
+            # Existência pela listagem do prefixo: a policy do backend não dá ListBucket fora
+            # de pendentes/ e revisao/, e sem isso o S3 responde 403 para chave inexistente.
+            listed = s3.list_objects_v2(Bucket=settings.bucket, Prefix=snapshot, MaxKeys=1)
+            if not any(o["Key"] == snapshot for o in listed.get("Contents", [])):
+                raise HTTPException(
+                    status_code=409, detail="abra o arquivo em Ver antes de aprovar"
+                )
             # Confere de novo: se a conferência do Ver falhou no meio, nada sem %PDF- passa.
             if not is_pdf(snapshot):
                 raise HTTPException(status_code=422, detail="o arquivo não é um PDF")
