@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Perguntas à Base de Conhecimento</title>
+  <style>
+    body { font-family: sans-serif; font-size: 1.25rem; line-height: 1.5; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    input, select, button { font-size: 1.1rem; padding: 0.4rem 0.6rem; margin: 0.25rem 0; }
+    #question { width: 100%; box-sizing: border-box; }
+    .meta { color: #444; font-size: 1rem; }
+    li { margin-bottom: 0.75rem; }
+  </style>
+</head>
+<body>
+  <h1>Perguntas à Base de Conhecimento</h1>
+  <div>
+    <label for="token">Token de administração:</label>
+    <input type="password" id="token" placeholder="x-admin-token">
+  </div>
+  <div>
+    <label for="question">Pergunta:</label>
+    <input type="text" id="question" placeholder="Digite sua pergunta...">
+  </div>
+  <div>
+    <label for="model">Modelo:</label>
+    <select id="model">
+      <option value="">Padrão</option>
+    </select>
+    <button id="ask">Perguntar</button>
+    <button id="search">Só a busca</button>
+  </div>
+  <p id="status"></p>
+  <section id="answer-section" hidden>
+    <h2>Resposta</h2>
+    <p id="answer"></p>
+    <p id="meta" class="meta"></p>
+    <h3>Fontes</h3>
+    <ul id="sources"></ul>
+  </section>
+  <section id="search-section" hidden>
+    <h2>Resultados da busca</h2>
+    <ul id="results"></ul>
+  </section>
+  <script>
+    const tokenInput = document.getElementById("token");
+    const questionInput = document.getElementById("question");
+    const modelSelect = document.getElementById("model");
+    const statusEl = document.getElementById("status");
+    const answerSection = document.getElementById("answer-section");
+    const answerEl = document.getElementById("answer");
+    const metaEl = document.getElementById("meta");
+    const sourcesEl = document.getElementById("sources");
+    const searchSection = document.getElementById("search-section");
+    const resultsEl = document.getElementById("results");
+
+    tokenInput.value = sessionStorage.getItem("adminToken") || "";
+    tokenInput.oninput = () => sessionStorage.setItem("adminToken", tokenInput.value);
+    tokenInput.onchange = () => loadModels();
+
+    // Preenche a lista com os modelos permitidos no backend, para comparar pequeno e grande.
+    async function loadModels() {
+      try {
+        const res = await fetch("/admin/models", {
+          headers: { "x-admin-token": sessionStorage.getItem("adminToken") || "" },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        (data.models || []).forEach(rememberModel);
+      } catch {
+        // sem lista, o envio usa o modelo padrão
+      }
+    }
+    if (tokenInput.value) loadModels();
+
+    function fileName(uri) {
+      return (uri || "").split("/").pop() || uri || "";
+    }
+
+    async function readError(res) {
+      if (res.status === 401) return "token inválido";
+      if (res.status === 429) return "limite do Bedrock, tente de novo em alguns segundos";
+      try {
+        const body = await res.json();
+        if (typeof body.detail === "string") return body.detail;
+        return JSON.stringify(body.detail || body);
+      } catch {
+        return `Erro (${res.status})`;
+      }
+    }
+
+    function rememberModel(modelArn) {
+      if (!modelArn) return;
+      const exists = Array.from(modelSelect.options).some((opt) => opt.value === modelArn);
+      if (!exists) {
+        const opt = document.createElement("option");
+        opt.value = modelArn;
+        opt.textContent = modelArn;
+        modelSelect.appendChild(opt);
+      }
+    }
+
+    document.getElementById("ask").onclick = async () => {
+      statusEl.textContent = "Consultando...";
+      const payload = { question: questionInput.value };
+      if (modelSelect.value) payload.model = modelSelect.value;
+      try {
+        const res = await fetch("/ask", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-token": sessionStorage.getItem("adminToken") || "",
+          },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          statusEl.textContent = await readError(res);
+          return;
+        }
+        const data = await res.json();
+        statusEl.textContent = "";
+        rememberModel(data.model);
+        answerEl.textContent = data.answer;
+        metaEl.textContent = `Modelo: ${data.model} | Latência: ${data.latency_ms} ms`;
+        sourcesEl.replaceChildren();
+        (data.sources || []).forEach((src) => {
+          const li = document.createElement("li");
+          const strong = document.createElement("strong");
+          strong.textContent = fileName(src.uri) + ": ";
+          const span = document.createElement("span");
+          span.textContent = src.excerpt;
+          li.append(strong, span);
+          sourcesEl.appendChild(li);
+        });
+        answerSection.hidden = false;
+      } catch {
+        statusEl.textContent = "Falha de rede ao consultar.";
+      }
+    };
+
+    document.getElementById("search").onclick = async () => {
+      statusEl.textContent = "Buscando trechos...";
+      try {
+        const res = await fetch("/search", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-token": sessionStorage.getItem("adminToken") || "",
+          },
+          body: JSON.stringify({ question: questionInput.value, top_k: 5 }),
+        });
+        if (!res.ok) {
+          statusEl.textContent = await readError(res);
+          return;
+        }
+        const data = await res.json();
+        statusEl.textContent = "";
+        resultsEl.replaceChildren();
+        (data.results || []).forEach((item) => {
+          const li = document.createElement("li");
+          const score = Number(item.score || 0).toFixed(2);
+          const header = document.createElement("strong");
+          header.textContent = `[${score}] ${fileName(item.uri)}: `;
+          const text = document.createElement("span");
+          text.textContent = item.text;
+          li.append(header, text);
+          resultsEl.appendChild(li);
+        });
+        searchSection.hidden = false;
+      } catch {
+        statusEl.textContent = "Falha de rede ao buscar.";
+      }
+    };
+  </script>
+</body>
+</html>

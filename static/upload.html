@@ -18,6 +18,8 @@
     // A autorização é pedida ao escolher o arquivo e usada no clique em enviar.
     // Com ?ttl=10 na URL dá para mostrar a autorização expirando.
     fileInput.onchange = async () => {
+      // A autorização anterior aponta para a chave do arquivo anterior: descarta antes de pedir outra.
+      auth = null;
       status.textContent = "Pedindo autorização...";
       try {
         const res = await fetch("/upload-url" + location.search, { method: "POST" });
@@ -38,9 +40,14 @@
       form.append("file", file); // o arquivo precisa ser o último campo
       try {
         const up = await fetch(auth.url, { method: "POST", body: form });
-        status.textContent = up.ok
-          ? "Recebido! Ele entra na base depois da moderação."
-          : `O S3 recusou o envio (${up.status}): arquivo grande demais ou autorização expirada.`;
+        if (up.ok) {
+          // Cada autorização é de uma chave só; o próximo envio pede outra.
+          auth = null;
+          fileInput.value = "";
+          status.textContent = "Recebido! Ele entra na base depois da moderação.";
+        } else {
+          status.textContent = `O S3 recusou o envio (${up.status}): arquivo grande demais ou autorização expirada.`;
+        }
       } catch (err) {
         status.textContent = "Falha de rede ao enviar.";
       }

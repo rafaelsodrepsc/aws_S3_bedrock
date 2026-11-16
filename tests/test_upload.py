@@ -48,6 +48,54 @@ def test_upload_url_is_rate_limited(client):
     assert statuses == [200] * 5 + [429]
 
 
+def test_per_client_limit_uses_proxy_header(settings, aws):
+    from dataclasses import replace
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    limited = replace(
+        settings, uploads_per_minute=100, uploads_per_minute_per_client=2,
+        client_ip_header="cf-connecting-ip",
+    )
+    client = TestClient(create_app(limited, aws["clients"]))
+
+    def call(ip):
+        return client.post("/upload-url", headers={"cf-connecting-ip": ip}).status_code
+
+    assert [call("1.1.1.1") for _ in range(3)] == [200, 200, 429]
+    assert call("2.2.2.2") == 200
+
+
+def test_per_client_limit_is_off_without_header_setting(client):
+    # Sem CLIENT_IP_HEADER, só vale o teto total (5 nos testes), como atrás do túnel.
+    statuses = [client.post("/upload-url").status_code for _ in range(5)]
+
+    assert statuses == [200] * 5
+
+
+def test_rate_limiter_keeps_keys_apart():
+    limiter = RateLimiter(1, clock=lambda: 0.0)
+
+    assert limiter.allow("a") and limiter.allow("b")
+    assert not limiter.allow("a")
+
+
+def test_rate_limiter_caps_distinct_clients(monkeypatch):
+    now = [0.0]
+    limiter = RateLimiter(5, clock=lambda: now[0])
+    monkeypatch.setattr(RateLimiter, "MAX_KEYS", 3)
+
+    assert all(limiter.allow(ip) for ip in ["a", "b", "c"])
+    # Cheio de clientes ativos: cliente novo é recusado, os conhecidos continuam.
+    assert not limiter.allow("d")
+    assert limiter.allow("a")
+    # Um minuto depois os parados saem e cabe gente nova.
+    now[0] = 61.0
+    assert limiter.allow("d")
+
+
 def test_rate_limiter_frees_slots_after_a_minute():
     now = [0.0]
     limiter = RateLimiter(2, clock=lambda: now[0])

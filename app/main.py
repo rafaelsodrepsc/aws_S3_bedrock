@@ -13,7 +13,7 @@ from typing import Any
 import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,9 @@ from app.settings import Settings
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 PENDING_PREFIX = "pendentes/"
 DOCS_PREFIX = "docs/"
+# Cópia que o moderador abre. A autorização de upload só grava em pendentes/, então
+# quem enviou não consegue trocar o arquivo depois que ele foi conferido.
+REVIEW_PREFIX = "revisao/"
 UUID_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 PENDING_KEY_PATTERN = rf"^pendentes/{UUID_PATTERN}\.pdf$"
 PDF_MAGIC = b"%PDF-"
@@ -69,22 +72,35 @@ class Clients:
 
 
 class RateLimiter:
-    """Janela deslizante de 60 segundos, global para o processo."""
+    """Janela deslizante de 60 segundos por chave (um cliente, ou "" para o total)."""
+
+    MAX_KEYS = 10_000
 
     def __init__(self, per_minute: int, clock: Callable[[], float] = time.monotonic) -> None:
         self._per_minute = per_minute
         self._clock = clock
-        self._hits: deque[float] = deque()
+        self._hits: dict[str, deque[float]] = {}
+        self._last_prune = float("-inf")
         self._lock = threading.Lock()
 
-    def allow(self) -> bool:
+    def allow(self, key: str = "") -> bool:
         now = self._clock()
         with self._lock:
-            while self._hits and now - self._hits[0] >= 60:
-                self._hits.popleft()
-            if len(self._hits) >= self._per_minute:
+            hits = self._hits.get(key)
+            if hits is None:
+                # Teto de clientes distintos: limpa os parados no máximo uma vez por segundo e,
+                # se continuar cheio, recusa cliente novo em vez de crescer sem limite.
+                if len(self._hits) >= self.MAX_KEYS and now - self._last_prune >= 1:
+                    self._last_prune = now
+                    self._hits = {k: h for k, h in self._hits.items() if h and now - h[-1] < 60}
+                if len(self._hits) >= self.MAX_KEYS:
+                    return False
+                hits = self._hits[key] = deque()
+            while hits and now - hits[0] >= 60:
+                hits.popleft()
+            if len(hits) >= self._per_minute:
                 return False
-            self._hits.append(now)
+            hits.append(now)
             return True
 
 
@@ -118,11 +134,20 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
     clients = clients or Clients.from_settings(settings)
     s3, kb_admin, kb_runtime = clients.s3, clients.kb_admin, clients.kb_runtime
     upload_limiter = RateLimiter(settings.uploads_per_minute)
+    client_limiter = RateLimiter(settings.uploads_per_minute_per_client)
+
+    def client_id(request: Request, header: str) -> str:
+        # O header só é confiável quando o proxy o sobrescreve (o Cloudflare faz isso com
+        # cf-connecting-ip). Sem ele, atrás de túnel todo mundo teria o IP do túnel.
+        forwarded = request.headers.get(header, "")
+        return forwarded.split(",")[0].strip() or "sem-header"
 
     app = FastAPI(title="Do bucket à IA")
 
     def require_admin(token: str | None) -> None:
-        if token is None or not secrets.compare_digest(token, settings.admin_token):
+        if token is None or not secrets.compare_digest(
+            token.encode(), settings.admin_token.encode()
+        ):
             raise HTTPException(status_code=401, detail="não autorizado")
 
     @app.get("/")
@@ -138,7 +163,11 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
         return FileResponse(STATIC_DIR / "admin.html")
 
     @app.post("/upload-url")
-    def create_upload_url(ttl: int = settings.upload_ttl_seconds) -> dict:
+    def create_upload_url(request: Request, ttl: int = settings.upload_ttl_seconds) -> dict:
+        # Por cliente primeiro, para um script em loop não gastar a cota da plateia inteira.
+        header = settings.client_ip_header
+        if header and not client_limiter.allow(client_id(request, header)):
+            raise HTTPException(status_code=429, detail="muitos envios agora, tente em um minuto")
         if not upload_limiter.allow():
             raise HTTPException(status_code=429, detail="muitos envios agora, tente em um minuto")
         # ttl menor permite a demo da autorização expirada; nunca passa do padrão.
@@ -165,38 +194,113 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
     def list_pending(x_admin_token: str | None = Header(default=None)) -> list[dict]:
         require_admin(x_admin_token)
         try:
-            resp = s3.list_objects_v2(Bucket=settings.bucket, Prefix=PENDING_PREFIX)
+            pages = s3.get_paginator("list_objects_v2").paginate(
+                Bucket=settings.bucket, Prefix=PENDING_PREFIX
+            )
+            return [
+                {
+                    "key": o["Key"],
+                    "size": o["Size"],
+                    "last_modified": o["LastModified"].isoformat(),
+                }
+                for page in pages
+                for o in page.get("Contents", [])
+            ]
         except (ClientError, BotoCoreError) as err:
             raise aws_failure("list_objects_v2", err) from err
-        return [
-            {"key": o["Key"], "size": o["Size"], "last_modified": o["LastModified"].isoformat()}
-            for o in resp.get("Contents", [])
-        ]
+
+    def review_key(pending_key: str) -> str:
+        return REVIEW_PREFIX + pending_key.removeprefix(PENDING_PREFIX)
+
+    def is_pdf(key: str) -> bool:
+        head = s3.get_object(Bucket=settings.bucket, Key=key, Range="bytes=0-4")
+        return head["Body"].read() == PDF_MAGIC
+
+    def discard(key: str) -> None:
+        try:
+            s3.delete_object(Bucket=settings.bucket, Key=key)
+        except (ClientError, BotoCoreError):
+            log.error("snapshot_discard_failed", extra={"ctx": {"key": key}})
+
+    @app.post("/admin/review")
+    def review(req: PendingKey, x_admin_token: str | None = Header(default=None)) -> dict:
+        # Tira uma cópia que quem enviou não alcança e devolve um link curto para ela.
+        # A aprovação publica exatamente essa cópia, a que o moderador abriu.
+        require_admin(x_admin_token)
+        snapshot = review_key(req.key)
+        try:
+            s3.copy_object(
+                Bucket=settings.bucket,
+                Key=snapshot,
+                CopySource={"Bucket": settings.bucket, "Key": req.key},
+            )
+        except (ClientError, BotoCoreError) as err:
+            raise aws_failure("review", err) from err
+        try:
+            # O S3 só conferiu o Content-Type declarado. Aqui olhamos o conteúdo de verdade.
+            if not is_pdf(snapshot):
+                raise HTTPException(status_code=422, detail="o arquivo não é um PDF")
+            url = s3.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": settings.bucket,
+                    "Key": snapshot,
+                    "ResponseContentType": "application/pdf",
+                    "ResponseContentDisposition": "inline",
+                },
+                ExpiresIn=60,
+            )
+        except (ClientError, BotoCoreError, HTTPException) as err:
+            # Cópia que o moderador não chegou a ver não pode ficar para a aprovação publicar.
+            discard(snapshot)
+            if isinstance(err, HTTPException):
+                raise
+            raise aws_failure("review", err) from err
+        log.info("document_reviewed", extra={"ctx": {"source": req.key, "snapshot": snapshot}})
+        return {"url": url}
 
     @app.post("/admin/approve")
     def approve(req: PendingKey, x_admin_token: str | None = Header(default=None)) -> dict:
         require_admin(x_admin_token)
+        snapshot = review_key(req.key)
         target = DOCS_PREFIX + req.key.removeprefix(PENDING_PREFIX)
         try:
-            # O S3 só conferiu o Content-Type declarado. Aqui olhamos o conteúdo de verdade.
-            head = s3.get_object(Bucket=settings.bucket, Key=req.key, Range="bytes=0-4")
-            if head["Body"].read() != PDF_MAGIC:
+            # Existência pela listagem do prefixo: a policy do backend não dá ListBucket fora
+            # de pendentes/ e revisao/, e sem isso o S3 responde 403 para chave inexistente.
+            listed = s3.list_objects_v2(Bucket=settings.bucket, Prefix=snapshot, MaxKeys=1)
+            if not any(o["Key"] == snapshot for o in listed.get("Contents", [])):
+                raise HTTPException(
+                    status_code=409, detail="abra o arquivo em Ver antes de aprovar"
+                )
+            # Confere de novo: se a conferência do Ver falhou no meio, nada sem %PDF- passa.
+            if not is_pdf(snapshot):
                 raise HTTPException(status_code=422, detail="o arquivo não é um PDF")
             s3.copy_object(
                 Bucket=settings.bucket,
                 Key=target,
-                CopySource={"Bucket": settings.bucket, "Key": req.key},
+                CopySource={"Bucket": settings.bucket, "Key": snapshot},
             )
+        except ClientError as err:
+            if err.response["Error"]["Code"] in ("NoSuchKey", "404"):
+                raise HTTPException(
+                    status_code=409, detail="abra o arquivo em Ver antes de aprovar"
+                ) from err
+            raise aws_failure("approve", err) from err
+        except BotoCoreError as err:
+            raise aws_failure("approve", err) from err
+        try:
+            s3.delete_object(Bucket=settings.bucket, Key=snapshot)
             s3.delete_object(Bucket=settings.bucket, Key=req.key)
         except (ClientError, BotoCoreError) as err:
-            raise aws_failure("approve", err) from err
-        log.info("document_approved", extra={"ctx": {"source": req.key, "target": target}})
+            raise aws_failure("approve_cleanup", err) from err
+        log.info("document_approved", extra={"ctx": {"source": snapshot, "target": target}})
         return {"key": target}
 
     @app.post("/admin/reject")
     def reject(req: PendingKey, x_admin_token: str | None = Header(default=None)) -> dict:
         require_admin(x_admin_token)
         try:
+            s3.delete_object(Bucket=settings.bucket, Key=review_key(req.key))
             s3.delete_object(Bucket=settings.bucket, Key=req.key)
         except (ClientError, BotoCoreError) as err:
             raise aws_failure("reject", err) from err
@@ -231,6 +335,11 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
             "statistics": job.get("statistics", {}),
             "failure_reasons": job.get("failureReasons", []),
         }
+
+    @app.get("/admin/models")
+    def list_models(x_admin_token: str | None = Header(default=None)) -> dict:
+        require_admin(x_admin_token)
+        return {"models": list(settings.model_arns)}
 
     @app.post("/ask")
     def ask(req: AskRequest, x_admin_token: str | None = Header(default=None)) -> dict:

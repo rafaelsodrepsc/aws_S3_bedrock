@@ -1,5 +1,6 @@
 import boto3
 import pytest
+from botocore.config import Config
 from botocore.stub import Stubber
 from fastapi.testclient import TestClient
 from moto import mock_aws
@@ -37,7 +38,9 @@ def settings():
 @pytest.fixture
 def aws(settings):
     with mock_aws():
-        s3 = boto3.client("s3", region_name="us-east-1")
+        # Mesma configuração de produção (Clients.from_settings).
+        s3_config = Config(signature_version="s3v4", s3={"addressing_style": "virtual"})
+        s3 = boto3.client("s3", region_name="us-east-1", config=s3_config)
         s3.create_bucket(Bucket=BUCKET)
         kb_admin = boto3.client("bedrock-agent", region_name="us-east-1")
         kb_runtime = boto3.client("bedrock-agent-runtime", region_name="us-east-1")

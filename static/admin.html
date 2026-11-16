@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Moderação e Sincronização</title>
+  <style>
+    body { font-family: sans-serif; font-size: 1.25rem; line-height: 1.5; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    input, button { font-size: 1.1rem; padding: 0.4rem 0.6rem; margin: 0.25rem 0.25rem 0.25rem 0; }
+    li { margin-bottom: 0.75rem; }
+  </style>
+</head>
+<body>
+  <h1>Moderação de Documentos</h1>
+  <div>
+    <label for="token">Token de administração:</label>
+    <input type="password" id="token" placeholder="x-admin-token">
+  </div>
+  <div>
+    <button id="refresh">Atualizar</button>
+    <button id="show-list">Mostrar lista</button>
+    <button id="sync">Sincronizar</button>
+  </div>
+  <p id="status"></p>
+  <ul id="pending-list" hidden></ul>
+  <section id="sync-section" hidden>
+    <h2>Sincronização</h2>
+    <p id="sync-job"></p>
+    <p id="sync-status"></p>
+    <pre id="sync-details"></pre>
+  </section>
+  <script>
+    const tokenInput = document.getElementById("token");
+    const statusEl = document.getElementById("status");
+    const pendingList = document.getElementById("pending-list");
+    const syncSection = document.getElementById("sync-section");
+    const syncJobEl = document.getElementById("sync-job");
+    const syncStatusEl = document.getElementById("sync-status");
+    const syncDetailsEl = document.getElementById("sync-details");
+    let pollTimer = null;
+
+    tokenInput.value = sessionStorage.getItem("adminToken") || "";
+    tokenInput.oninput = () => sessionStorage.setItem("adminToken", tokenInput.value);
+
+    function headers(json = false) {
+      const h = { "x-admin-token": sessionStorage.getItem("adminToken") || "" };
+      if (json) h["Content-Type"] = "application/json";
+      return h;
+    }
+
+    async function readError(res) {
+      if (res.status === 401) return "token inválido";
+      try {
+        const body = await res.json();
+        if (typeof body.detail === "string") {
+          if (body.detail.includes("ConflictException")) return "já existe uma sincronização em andamento";
+          return body.detail;
+        }
+        return JSON.stringify(body.detail || body);
+      } catch {
+        return `Erro (${res.status})`;
+      }
+    }
+
+    async function moderate(action, item) {
+      statusEl.textContent = "Processando...";
+      try {
+        const res = await fetch(`/admin/${action}`, {
+          method: "POST",
+          headers: headers(true),
+          body: JSON.stringify({ key: item.key }),
+        });
+        if (!res.ok) {
+          statusEl.textContent = await readError(res);
+          return;
+        }
+        statusEl.textContent = "";
+        await loadPending();
+      } catch {
+        statusEl.textContent = "Falha de rede na moderação.";
+      }
+    }
+
+    async function loadPending() {
+      statusEl.textContent = "Carregando pendentes...";
+      try {
+        const res = await fetch("/admin/pending", { headers: headers() });
+        if (!res.ok) {
+          statusEl.textContent = await readError(res);
+          return;
+        }
+        const items = await res.json();
+        statusEl.textContent = `Pendentes carregados (${items.length}).`;
+        pendingList.replaceChildren();
+        items.forEach((item) => {
+          const li = document.createElement("li");
+          const kb = (Number(item.size || 0) / 1024).toFixed(1);
+          const info = document.createElement("span");
+          info.textContent = `${item.key} (${kb} KB, ${item.last_modified}) `;
+          const viewBtn = document.createElement("button");
+          viewBtn.textContent = "Ver";
+          viewBtn.onclick = () => preview(item.key);
+          const approveBtn = document.createElement("button");
+          approveBtn.textContent = "Aprovar";
+          approveBtn.onclick = () => moderate("approve", item);
+          const rejectBtn = document.createElement("button");
+          rejectBtn.textContent = "Rejeitar";
+          rejectBtn.onclick = () => moderate("reject", item);
+          li.append(info, viewBtn, approveBtn, rejectBtn);
+          pendingList.appendChild(li);
+        });
+      } catch {
+        statusEl.textContent = "Falha de rede ao listar pendentes.";
+      }
+    }
+
+    // Abre o PDF numa aba nova, no seu notebook, antes de aprovar. Nunca no telão.
+    // O backend guarda uma cópia do que você viu, e é essa cópia que a aprovação publica.
+    async function preview(key) {
+      const tab = window.open("about:blank", "_blank");
+      if (tab) tab.opener = null;
+      try {
+        const res = await fetch("/admin/review", {
+          method: "POST",
+          headers: headers(true),
+          body: JSON.stringify({ key }),
+        });
+        if (!res.ok) {
+          if (tab) tab.close();
+          statusEl.textContent = await readError(res);
+          return;
+        }
+        const data = await res.json();
+        if (tab) tab.location.href = data.url;
+        else statusEl.textContent = "O navegador bloqueou a aba nova; libere pop-ups para esta página.";
+      } catch {
+        if (tab) tab.close();
+        statusEl.textContent = "Falha de rede ao abrir o arquivo.";
+      }
+    }
+
+    document.getElementById("refresh").onclick = loadPending;
+    document.getElementById("show-list").onclick = () => {
+      pendingList.hidden = false;
+    };
+
+    async function pollSync(jobId) {
+      try {
+        const res = await fetch(`/admin/sync/${encodeURIComponent(jobId)}`, { headers: headers() });
+        if (!res.ok) {
+          statusEl.textContent = await readError(res);
+          clearInterval(pollTimer);
+          return;
+        }
+        const data = await res.json();
+        syncStatusEl.textContent = `Status: ${data.status}`;
+        syncDetailsEl.textContent = JSON.stringify(
+          { statistics: data.statistics, failure_reasons: data.failure_reasons },
+          null,
+          2
+        );
+        if (["COMPLETE", "FAILED", "STOPPED"].includes(data.status)) {
+          clearInterval(pollTimer);
+        }
+      } catch {
+        statusEl.textContent = "Falha de rede ao consultar sincronização.";
+        clearInterval(pollTimer);
+      }
+    }
+
+    document.getElementById("sync").onclick = async () => {
+      if (pollTimer) clearInterval(pollTimer);
+      statusEl.textContent = "Iniciando sincronização...";
+      try {
+        const res = await fetch("/admin/sync", { method: "POST", headers: headers() });
+        if (!res.ok) {
+          statusEl.textContent = await readError(res);
+          return;
+        }
+        const data = await res.json();
+        statusEl.textContent = "";
+        syncSection.hidden = false;
+        syncJobEl.textContent = `Job: ${data.job_id}`;
+        syncStatusEl.textContent = `Status: ${data.status}`;
+        syncDetailsEl.textContent = "";
+        pollTimer = setInterval(() => pollSync(data.job_id), 3000);
+      } catch {
+        statusEl.textContent = "Falha de rede ao iniciar sincronização.";
+      }
+    };
+  </script>
+</body>
+</html>
