@@ -50,23 +50,28 @@
 
     async function readError(res) {
       if (res.status === 401) return "token inválido";
-      if (res.status === 409) return "já existe uma sincronização em andamento";
       try {
         const body = await res.json();
-        if (typeof body.detail === "string") return body.detail;
+        if (typeof body.detail === "string") {
+          if (body.detail.includes("ConflictException")) return "já existe uma sincronização em andamento";
+          if (body.detail.includes("PreconditionFailed")) return "o arquivo mudou depois da lista; atualize e confira de novo";
+          return body.detail;
+        }
         return JSON.stringify(body.detail || body);
       } catch {
         return `Erro (${res.status})`;
       }
     }
 
-    async function moderate(action, key) {
+    async function moderate(action, item) {
       statusEl.textContent = "Processando...";
+      // A aprovação leva o ETag da lista: se o arquivo mudou depois, o backend recusa.
+      const body = action === "approve" ? { key: item.key, etag: item.etag } : { key: item.key };
       try {
         const res = await fetch(`/admin/${action}`, {
           method: "POST",
           headers: headers(true),
-          body: JSON.stringify({ key }),
+          body: JSON.stringify(body),
         });
         if (!res.ok) {
           statusEl.textContent = await readError(res);
@@ -95,17 +100,40 @@
           const kb = (Number(item.size || 0) / 1024).toFixed(1);
           const info = document.createElement("span");
           info.textContent = `${item.key} (${kb} KB, ${item.last_modified}) `;
+          const viewBtn = document.createElement("button");
+          viewBtn.textContent = "Ver";
+          viewBtn.onclick = () => preview(item.key);
           const approveBtn = document.createElement("button");
           approveBtn.textContent = "Aprovar";
-          approveBtn.onclick = () => moderate("approve", item.key);
+          approveBtn.onclick = () => moderate("approve", item);
           const rejectBtn = document.createElement("button");
           rejectBtn.textContent = "Rejeitar";
-          rejectBtn.onclick = () => moderate("reject", item.key);
-          li.append(info, approveBtn, rejectBtn);
+          rejectBtn.onclick = () => moderate("reject", item);
+          li.append(info, viewBtn, approveBtn, rejectBtn);
           pendingList.appendChild(li);
         });
       } catch {
         statusEl.textContent = "Falha de rede ao listar pendentes.";
+      }
+    }
+
+    // Abre o PDF numa aba nova, no seu notebook, antes de aprovar. Nunca no telão.
+    async function preview(key) {
+      const tab = window.open("about:blank", "_blank");
+      if (tab) tab.opener = null;
+      try {
+        const res = await fetch(`/admin/preview?key=${encodeURIComponent(key)}`, { headers: headers() });
+        if (!res.ok) {
+          if (tab) tab.close();
+          statusEl.textContent = await readError(res);
+          return;
+        }
+        const data = await res.json();
+        if (tab) tab.location.href = data.url;
+        else statusEl.textContent = "O navegador bloqueou a aba nova; libere pop-ups para esta página.";
+      } catch {
+        if (tab) tab.close();
+        statusEl.textContent = "Falha de rede ao abrir o arquivo.";
       }
     }
 
@@ -129,7 +157,7 @@
           null,
           2
         );
-        if (data.status === "COMPLETE" || data.status === "FAILED") {
+        if (["COMPLETE", "FAILED", "STOPPED"].includes(data.status)) {
           clearInterval(pollTimer);
         }
       } catch {
