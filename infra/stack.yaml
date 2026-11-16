@@ -51,6 +51,10 @@ Resources:
             Status: Enabled
             Prefix: pendentes/
             ExpirationInDays: 1
+          - Id: ExpireReview
+            Status: Enabled
+            Prefix: revisao/
+            ExpirationInDays: 1
           - Id: AbortIncompleteUploads
             Status: Enabled
             AbortIncompleteMultipartUpload:
@@ -184,7 +188,10 @@ Resources:
         Statement:
           - Effect: Allow
             Action: [s3:PutObject, s3:GetObject, s3:DeleteObject]
-            Resource: !Sub '${DocsBucket.Arn}/pendentes/*'
+            Resource:
+              - !Sub '${DocsBucket.Arn}/pendentes/*'
+              # Cópia que o moderador abre e que a aprovação publica.
+              - !Sub '${DocsBucket.Arn}/revisao/*'
           - Effect: Allow
             Action: s3:PutObject
             Resource: !Sub '${DocsBucket.Arn}/docs/*'

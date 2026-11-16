@@ -30,15 +30,17 @@ Antes de tudo, crie um alerta no AWS Budgets. A demo custa pouco, mas recurso es
 
    ```sh
    set -a && source .env && set +a
-   uv run uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
+   uv run uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
    ```
+
+   O túnel conecta localmente, então o backend não precisa escutar na rede. Isso também importa para o `CLIENT_IP_HEADER`: o header só é confiável se ninguém alcançar a porta 8000 sem passar pelo Cloudflare.
 
 Use um túnel com endereço fixo. O Quick Tunnel do Cloudflare muda de endereço a cada execução e quebra o QR code e o CORS.
 
 ## Páginas
 
 - `/` recebe o PDF (até 5 MB). É o endereço do QR code. Com `?ttl=10` dá para mostrar a autorização expirando.
-- `/admin` lista os pendentes, abre cada PDF numa aba ("Ver") para você conferir, aprova ou rejeita, e dispara a sincronização. A aprovação falha se o arquivo mudou depois da lista. A lista só aparece depois de clicar em "Mostrar lista", para você conferir antes de projetar.
+- `/admin` lista os pendentes, abre cada PDF numa aba ("Ver") para você conferir, aprova ou rejeita, e dispara a sincronização. Só dá para aprovar depois de abrir o arquivo. A lista só aparece depois de clicar em "Mostrar lista", para você conferir antes de projetar.
 - `/chat` faz perguntas com fonte, mostra só a busca com os scores e troca entre os dois modelos da stack.
 
 As duas últimas pedem o `ADMIN_TOKEN`, que fica guardado só na aba do navegador.
@@ -52,7 +54,8 @@ As duas últimas pedem o `ADMIN_TOKEN`, que fica guardado só na aba do navegado
 
 - O upload usa POST assinado, e não PUT, porque a policy do POST aceita condições de tipo, tamanho e chave que o S3 confere antes de gravar.
 - A chave do arquivo é gerada no servidor, em `pendentes/`. A Knowledge Base só lê `docs/`, então nada entra na base sem aprovação.
-- O S3 só confere o `Content-Type` declarado. Por isso a aprovação lê os primeiros bytes e recusa o que não começa com `%PDF-`.
+- O S3 só confere o `Content-Type` declarado. Por isso, ao abrir um arquivo para conferir, o backend lê os primeiros bytes e recusa o que não começa com `%PDF-`.
+- A autorização de upload continua valendo por alguns minutos, então quem enviou poderia trocar o arquivo depois que você conferiu. Por isso "Ver" guarda uma cópia em `revisao/`, onde a autorização não grava, e a aprovação publica essa cópia.
 - Há um teto de autorizações por minuto para todo mundo e, com `CLIENT_IP_HEADER=cf-connecting-ip` no Cloudflare Tunnel, um limite por pessoa. Sem esse header o limite por pessoa fica desligado, porque atrás do túnel todo mundo chega com o mesmo IP.
 - O lifecycle do bucket apaga `pendentes/` depois de um dia.
 

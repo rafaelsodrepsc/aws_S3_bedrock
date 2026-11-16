@@ -54,7 +54,6 @@
         const body = await res.json();
         if (typeof body.detail === "string") {
           if (body.detail.includes("ConflictException")) return "já existe uma sincronização em andamento";
-          if (body.detail.includes("PreconditionFailed")) return "o arquivo mudou depois da lista; atualize e confira de novo";
           return body.detail;
         }
         return JSON.stringify(body.detail || body);
@@ -65,13 +64,11 @@
 
     async function moderate(action, item) {
       statusEl.textContent = "Processando...";
-      // A aprovação leva o ETag da lista: se o arquivo mudou depois, o backend recusa.
-      const body = action === "approve" ? { key: item.key, etag: item.etag } : { key: item.key };
       try {
         const res = await fetch(`/admin/${action}`, {
           method: "POST",
           headers: headers(true),
-          body: JSON.stringify(body),
+          body: JSON.stringify({ key: item.key }),
         });
         if (!res.ok) {
           statusEl.textContent = await readError(res);
@@ -118,11 +115,16 @@
     }
 
     // Abre o PDF numa aba nova, no seu notebook, antes de aprovar. Nunca no telão.
+    // O backend guarda uma cópia do que você viu, e é essa cópia que a aprovação publica.
     async function preview(key) {
       const tab = window.open("about:blank", "_blank");
       if (tab) tab.opener = null;
       try {
-        const res = await fetch(`/admin/preview?key=${encodeURIComponent(key)}`, { headers: headers() });
+        const res = await fetch("/admin/review", {
+          method: "POST",
+          headers: headers(true),
+          body: JSON.stringify({ key }),
+        });
         if (!res.ok) {
           if (tab) tab.close();
           statusEl.textContent = await readError(res);

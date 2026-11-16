@@ -82,6 +82,20 @@ def test_rate_limiter_keeps_keys_apart():
     assert not limiter.allow("a")
 
 
+def test_rate_limiter_caps_distinct_clients(monkeypatch):
+    now = [0.0]
+    limiter = RateLimiter(5, clock=lambda: now[0])
+    monkeypatch.setattr(RateLimiter, "MAX_KEYS", 3)
+
+    assert all(limiter.allow(ip) for ip in ["a", "b", "c"])
+    # Cheio de clientes ativos: cliente novo é recusado, os conhecidos continuam.
+    assert not limiter.allow("d")
+    assert limiter.allow("a")
+    # Um minuto depois os parados saem e cabe gente nova.
+    now[0] = 61.0
+    assert limiter.allow("d")
+
+
 def test_rate_limiter_frees_slots_after_a_minute():
     now = [0.0]
     limiter = RateLimiter(2, clock=lambda: now[0])
