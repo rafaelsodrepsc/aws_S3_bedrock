@@ -48,7 +48,7 @@ def test_prints_env_from_stack_outputs(capsys) -> None:
         "DATA_SOURCE_ID=DS12345678\n"
         f"MODEL_ARNS={OUTPUTS['ModelArns']}\n"
         "UPLOAD_TTL_SECONDS=300\n"
-        "UPLOADS_PER_MINUTE=60\n"
+        "UPLOADS_PER_MINUTE=120\n"
     )
     assert captured.err == ""
 

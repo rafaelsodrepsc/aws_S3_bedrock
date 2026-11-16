@@ -13,8 +13,12 @@ class Settings:
     admin_token: str
     upload_ttl_seconds: int = 300
     max_upload_bytes: int = 5 * 1024 * 1024
-    # Limite global, não por IP: atrás do túnel todo mundo chega com o mesmo IP.
-    uploads_per_minute: int = 60
+    # Teto somado de todos os clientes.
+    uploads_per_minute: int = 120
+    # Limite por cliente, só ativo com client_ip_header: atrás do túnel o IP da conexão é o
+    # mesmo para todos. Configure só se o proxy sobrescreve o header (ex.: cf-connecting-ip).
+    uploads_per_minute_per_client: int = 10
+    client_ip_header: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -32,5 +36,7 @@ class Settings:
             model_arns=models,
             admin_token=token,
             upload_ttl_seconds=int(os.getenv("UPLOAD_TTL_SECONDS", "300")),
-            uploads_per_minute=int(os.getenv("UPLOADS_PER_MINUTE", "60")),
+            uploads_per_minute=int(os.getenv("UPLOADS_PER_MINUTE", "120")),
+            uploads_per_minute_per_client=int(os.getenv("UPLOADS_PER_MINUTE_PER_CLIENT", "10")),
+            client_ip_header=os.getenv("CLIENT_IP_HEADER") or None,
         )

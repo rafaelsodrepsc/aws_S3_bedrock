@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> None:
         parser.exit(1, f"Outputs ausentes na stack: {', '.join(missing)}\n")
 
     lines = [f"{env}={outputs[key]}" for env, key in ENV_OUTPUTS.items()]
-    print("\n".join([*lines, "UPLOAD_TTL_SECONDS=300", "UPLOADS_PER_MINUTE=60"]))
+    print("\n".join([*lines, "UPLOAD_TTL_SECONDS=300", "UPLOADS_PER_MINUTE=120"]))
 
 
 if __name__ == "__main__":

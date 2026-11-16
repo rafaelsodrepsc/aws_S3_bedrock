@@ -13,7 +13,7 @@ from typing import Any
 import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -31,6 +31,7 @@ STATUS_BY_AWS_CODE = {
     "ThrottlingException": 429,
     "ConflictException": 409,
     "NoSuchKey": 404,
+    "PreconditionFailed": 409,
     "ResourceNotFoundException": 404,
 }
 
@@ -69,27 +70,38 @@ class Clients:
 
 
 class RateLimiter:
-    """Janela deslizante de 60 segundos, global para o processo."""
+    """Janela deslizante de 60 segundos por chave (um cliente, ou "" para o total)."""
+
+    MAX_KEYS = 10_000
 
     def __init__(self, per_minute: int, clock: Callable[[], float] = time.monotonic) -> None:
         self._per_minute = per_minute
         self._clock = clock
-        self._hits: deque[float] = deque()
+        self._hits: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
 
-    def allow(self) -> bool:
+    def allow(self, key: str = "") -> bool:
         now = self._clock()
         with self._lock:
-            while self._hits and now - self._hits[0] >= 60:
-                self._hits.popleft()
-            if len(self._hits) >= self._per_minute:
+            if len(self._hits) > self.MAX_KEYS:
+                # Descarta clientes parados para a memória não crescer sem limite.
+                self._hits = {k: h for k, h in self._hits.items() if h and now - h[-1] < 60}
+            hits = self._hits.setdefault(key, deque())
+            while hits and now - hits[0] >= 60:
+                hits.popleft()
+            if len(hits) >= self._per_minute:
                 return False
-            self._hits.append(now)
+            hits.append(now)
             return True
 
 
 class PendingKey(BaseModel):
     key: str = Field(pattern=PENDING_KEY_PATTERN)
+
+
+class ApproveRequest(PendingKey):
+    # ETag que o moderador viu na lista: se o arquivo mudar depois, a aprovação falha.
+    etag: str = Field(min_length=1, max_length=100)
 
 
 class AskRequest(BaseModel):
@@ -118,11 +130,20 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
     clients = clients or Clients.from_settings(settings)
     s3, kb_admin, kb_runtime = clients.s3, clients.kb_admin, clients.kb_runtime
     upload_limiter = RateLimiter(settings.uploads_per_minute)
+    client_limiter = RateLimiter(settings.uploads_per_minute_per_client)
+
+    def client_id(request: Request, header: str) -> str:
+        # O header só é confiável quando o proxy o sobrescreve (o Cloudflare faz isso com
+        # cf-connecting-ip). Sem ele, atrás de túnel todo mundo teria o IP do túnel.
+        forwarded = request.headers.get(header, "")
+        return forwarded.split(",")[0].strip() or "sem-header"
 
     app = FastAPI(title="Do bucket à IA")
 
     def require_admin(token: str | None) -> None:
-        if token is None or not secrets.compare_digest(token, settings.admin_token):
+        if token is None or not secrets.compare_digest(
+            token.encode(), settings.admin_token.encode()
+        ):
             raise HTTPException(status_code=401, detail="não autorizado")
 
     @app.get("/")
@@ -138,7 +159,11 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
         return FileResponse(STATIC_DIR / "admin.html")
 
     @app.post("/upload-url")
-    def create_upload_url(ttl: int = settings.upload_ttl_seconds) -> dict:
+    def create_upload_url(request: Request, ttl: int = settings.upload_ttl_seconds) -> dict:
+        # Por cliente primeiro, para um script em loop não gastar a cota da plateia inteira.
+        header = settings.client_ip_header
+        if header and not client_limiter.allow(client_id(request, header)):
+            raise HTTPException(status_code=429, detail="muitos envios agora, tente em um minuto")
         if not upload_limiter.allow():
             raise HTTPException(status_code=429, detail="muitos envios agora, tente em um minuto")
         # ttl menor permite a demo da autorização expirada; nunca passa do padrão.
@@ -165,27 +190,62 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
     def list_pending(x_admin_token: str | None = Header(default=None)) -> list[dict]:
         require_admin(x_admin_token)
         try:
-            resp = s3.list_objects_v2(Bucket=settings.bucket, Prefix=PENDING_PREFIX)
+            pages = s3.get_paginator("list_objects_v2").paginate(
+                Bucket=settings.bucket, Prefix=PENDING_PREFIX
+            )
+            return [
+                {
+                    "key": o["Key"],
+                    "size": o["Size"],
+                    "last_modified": o["LastModified"].isoformat(),
+                    "etag": o["ETag"],
+                }
+                for page in pages
+                for o in page.get("Contents", [])
+            ]
         except (ClientError, BotoCoreError) as err:
             raise aws_failure("list_objects_v2", err) from err
-        return [
-            {"key": o["Key"], "size": o["Size"], "last_modified": o["LastModified"].isoformat()}
-            for o in resp.get("Contents", [])
-        ]
+
+    @app.get("/admin/preview")
+    def preview(
+        key: str = Query(pattern=PENDING_KEY_PATTERN),
+        x_admin_token: str | None = Header(default=None),
+    ) -> dict:
+        # Link curto para o moderador abrir o PDF antes de aprovar.
+        require_admin(x_admin_token)
+        try:
+            url = s3.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": settings.bucket,
+                    "Key": key,
+                    "ResponseContentType": "application/pdf",
+                    "ResponseContentDisposition": "inline",
+                },
+                ExpiresIn=60,
+            )
+        except (ClientError, BotoCoreError) as err:
+            raise aws_failure("generate_presigned_url", err) from err
+        return {"url": url}
 
     @app.post("/admin/approve")
-    def approve(req: PendingKey, x_admin_token: str | None = Header(default=None)) -> dict:
+    def approve(req: ApproveRequest, x_admin_token: str | None = Header(default=None)) -> dict:
         require_admin(x_admin_token)
         target = DOCS_PREFIX + req.key.removeprefix(PENDING_PREFIX)
         try:
             # O S3 só conferiu o Content-Type declarado. Aqui olhamos o conteúdo de verdade.
-            head = s3.get_object(Bucket=settings.bucket, Key=req.key, Range="bytes=0-4")
+            # As duas chamadas ficam presas ao ETag da lista: a autorização de upload ainda
+            # pode estar válida, e quem enviou poderia trocar o arquivo no meio do caminho.
+            head = s3.get_object(
+                Bucket=settings.bucket, Key=req.key, Range="bytes=0-4", IfMatch=req.etag
+            )
             if head["Body"].read() != PDF_MAGIC:
                 raise HTTPException(status_code=422, detail="o arquivo não é um PDF")
             s3.copy_object(
                 Bucket=settings.bucket,
                 Key=target,
                 CopySource={"Bucket": settings.bucket, "Key": req.key},
+                CopySourceIfMatch=req.etag,
             )
             s3.delete_object(Bucket=settings.bucket, Key=req.key)
         except (ClientError, BotoCoreError) as err:
