@@ -195,12 +195,11 @@ Resources:
           - Effect: Allow
             Action: s3:PutObject
             Resource: !Sub '${DocsBucket.Arn}/docs/*'
+          # Sem condição de prefixo: sem ListBucket, ler uma chave que não existe volta 403
+          # em vez de 404, e o backend não distingue "não existe" de "sem permissão".
           - Effect: Allow
             Action: s3:ListBucket
             Resource: !GetAtt DocsBucket.Arn
-            Condition:
-              StringLike:
-                s3:prefix: pendentes/*
           - Effect: Allow
             Action: [bedrock:StartIngestionJob, bedrock:GetIngestionJob, bedrock:Retrieve]
             Resource: !GetAtt KnowledgeBase.KnowledgeBaseArn

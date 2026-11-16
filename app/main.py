@@ -212,6 +212,16 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
     def review_key(pending_key: str) -> str:
         return REVIEW_PREFIX + pending_key.removeprefix(PENDING_PREFIX)
 
+    def is_pdf(key: str) -> bool:
+        head = s3.get_object(Bucket=settings.bucket, Key=key, Range="bytes=0-4")
+        return head["Body"].read() == PDF_MAGIC
+
+    def discard(key: str) -> None:
+        try:
+            s3.delete_object(Bucket=settings.bucket, Key=key)
+        except (ClientError, BotoCoreError):
+            log.error("snapshot_discard_failed", extra={"ctx": {"key": key}})
+
     @app.post("/admin/review")
     def review(req: PendingKey, x_admin_token: str | None = Header(default=None)) -> dict:
         # Tira uma cópia que quem enviou não alcança e devolve um link curto para ela.
@@ -224,10 +234,11 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
                 Key=snapshot,
                 CopySource={"Bucket": settings.bucket, "Key": req.key},
             )
+        except (ClientError, BotoCoreError) as err:
+            raise aws_failure("review", err) from err
+        try:
             # O S3 só conferiu o Content-Type declarado. Aqui olhamos o conteúdo de verdade.
-            head = s3.get_object(Bucket=settings.bucket, Key=snapshot, Range="bytes=0-4")
-            if head["Body"].read() != PDF_MAGIC:
-                s3.delete_object(Bucket=settings.bucket, Key=snapshot)
+            if not is_pdf(snapshot):
                 raise HTTPException(status_code=422, detail="o arquivo não é um PDF")
             url = s3.generate_presigned_url(
                 "get_object",
@@ -239,7 +250,11 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
                 },
                 ExpiresIn=60,
             )
-        except (ClientError, BotoCoreError) as err:
+        except (ClientError, BotoCoreError, HTTPException) as err:
+            # Cópia que o moderador não chegou a ver não pode ficar para a aprovação publicar.
+            discard(snapshot)
+            if isinstance(err, HTTPException):
+                raise
             raise aws_failure("review", err) from err
         log.info("document_reviewed", extra={"ctx": {"source": req.key, "snapshot": snapshot}})
         return {"url": url}
@@ -250,6 +265,9 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
         snapshot = review_key(req.key)
         target = DOCS_PREFIX + req.key.removeprefix(PENDING_PREFIX)
         try:
+            # Confere de novo: se a conferência do Ver falhou no meio, nada sem %PDF- passa.
+            if not is_pdf(snapshot):
+                raise HTTPException(status_code=422, detail="o arquivo não é um PDF")
             s3.copy_object(
                 Bucket=settings.bucket,
                 Key=target,

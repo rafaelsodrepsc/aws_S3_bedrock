@@ -122,6 +122,38 @@ def test_swaps_after_review_never_reach_docs(client, aws, admin, swaps):
     assert body_of(aws["s3"], APPROVED) == b"%PDF-1.7 conferido"
 
 
+def test_failed_check_discards_unseen_snapshot(client, aws, admin, monkeypatch):
+    # O moderador viu o PDF; quem enviou troca o arquivo, e o segundo Ver falha na leitura.
+    put_pending(aws["s3"], b"%PDF-1.7 conferido")
+    client.post("/admin/review", json={"key": PENDING}, headers=admin)
+    put_pending(aws["s3"], b"<html>malicioso</html>")
+    real_get = aws["s3"].get_object
+
+    def flaky_get(**kwargs):
+        if kwargs["Key"] == REVIEW:
+            from botocore.exceptions import ClientError
+
+            raise ClientError({"Error": {"Code": "SlowDown"}}, "GetObject")
+        return real_get(**kwargs)
+
+    monkeypatch.setattr(aws["s3"], "get_object", flaky_get)
+    assert client.post("/admin/review", json={"key": PENDING}, headers=admin).status_code == 502
+    monkeypatch.setattr(aws["s3"], "get_object", real_get)
+
+    assert keys(aws["s3"], "revisao/") == []
+    assert client.post("/admin/approve", json={"key": PENDING}, headers=admin).status_code == 409
+    assert keys(aws["s3"], "docs/") == []
+
+
+def test_approve_rechecks_pdf_on_the_snapshot(client, aws, admin):
+    aws["s3"].put_object(Bucket=BUCKET, Key=REVIEW, Body=b"<html>nao conferido</html>")
+
+    resp = client.post("/admin/approve", json={"key": PENDING}, headers=admin)
+
+    assert resp.status_code == 422
+    assert keys(aws["s3"], "docs/") == []
+
+
 def test_list_pending_paginates(client, aws, admin):
     for i in range(1001):
         aws["s3"].put_object(
