@@ -29,8 +29,10 @@ Escolha todos os eventos de criação (`s3:ObjectCreated:*`) e remoção
 Salve a [notificação](https://docs.aws.amazon.com/AmazonS3/latest/userguide/enable-event-notifications.html)
 e confira a permissão da função para o S3 invocá-la.
 
-Uploads em rajada geram vários eventos; `ConflictException` é esperado quando
-já existe uma ingestão rodando. O handler registra isso e retorna sem falhar.
-O sync é incremental: o próximo job inclui as alterações pendentes.
-Este handler não agenda esse próximo job; se não houver outro evento depois,
-inicie uma sincronização manual para recolher arquivos que ficaram de fora.
+Uploads em rajada geram vários eventos, e `ConflictException` é esperado quando
+já existe uma ingestão rodando. Nesse caso o handler falha de propósito: o S3
+invoca a Lambda de forma assíncrona, e a Lambda repete a invocação até 2 vezes,
+com alguns minutos de espera. Como o sync é incremental, a nova tentativa pega o
+arquivo que o job anterior não viu. Por isso aparecem erros nas métricas da
+função durante uma rajada; eles não são problema. Se as tentativas acabarem e o
+arquivo ainda faltar, rode uma sincronização manual pela página `/admin`.

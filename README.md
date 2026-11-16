@@ -38,14 +38,14 @@ Use um túnel com endereço fixo. O Quick Tunnel do Cloudflare muda de endereço
 ## Páginas
 
 - `/` recebe o PDF (até 5 MB). É o endereço do QR code. Com `?ttl=10` dá para mostrar a autorização expirando.
-- `/admin` lista os pendentes, aprova ou rejeita, e dispara a sincronização. A lista só aparece depois de clicar em "Mostrar lista", para você conferir antes de projetar.
+- `/admin` lista os pendentes, abre cada PDF numa aba ("Ver") para você conferir, aprova ou rejeita, e dispara a sincronização. A aprovação falha se o arquivo mudou depois da lista. A lista só aparece depois de clicar em "Mostrar lista", para você conferir antes de projetar.
 - `/chat` faz perguntas com fonte, mostra só a busca com os scores e troca entre os dois modelos da stack.
 
 As duas últimas pedem o `ADMIN_TOKEN`, que fica guardado só na aba do navegador.
 
 ## O que mais tem aqui
 
-- `eval/`: mede se a busca acha o arquivo certo (acerto em k e MRR). Copie `eval/perguntas.example.json`, escreva suas perguntas e rode `uv run python -m eval.run --kb-id SEU_KB --arquivo eval/perguntas.json`.
+- `eval/`: mede se a busca acha o arquivo certo (acerto em k e MRR). Copie `eval/perguntas.example.json`, escreva suas perguntas e rode `uv run python -m eval.run --kb-id SEU_KB --arquivo eval/perguntas.json`. A `fonte_esperada` é o nome do arquivo dentro de `docs/`; os PDFs aprovados pela demo ficam com o nome do UUID gerado no upload.
 - `lambda/auto_sync/`: Lambda que sincroniza a Knowledge Base quando um arquivo entra ou sai de `docs/`. É o passo seguinte da demo, que sincroniza na mão.
 
 ## Decisões que valem saber
@@ -53,7 +53,7 @@ As duas últimas pedem o `ADMIN_TOKEN`, que fica guardado só na aba do navegado
 - O upload usa POST assinado, e não PUT, porque a policy do POST aceita condições de tipo, tamanho e chave que o S3 confere antes de gravar.
 - A chave do arquivo é gerada no servidor, em `pendentes/`. A Knowledge Base só lê `docs/`, então nada entra na base sem aprovação.
 - O S3 só confere o `Content-Type` declarado. Por isso a aprovação lê os primeiros bytes e recusa o que não começa com `%PDF-`.
-- O limite de autorizações por minuto é global e não por IP, porque atrás do túnel todo mundo chega com o mesmo IP.
+- Há um teto de autorizações por minuto para todo mundo e, com `CLIENT_IP_HEADER=cf-connecting-ip` no Cloudflare Tunnel, um limite por pessoa. Sem esse header o limite por pessoa fica desligado, porque atrás do túnel todo mundo chega com o mesmo IP.
 - O lifecycle do bucket apaga `pendentes/` depois de um dia.
 
 ## Apagar tudo

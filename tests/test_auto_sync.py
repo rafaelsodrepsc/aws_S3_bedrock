@@ -73,17 +73,17 @@ def test_multiple_records_start_one_job(auto_sync: ModuleType, aws: dict) -> Non
     aws["admin_stub"].assert_no_pending_responses()
 
 
-def test_conflict_returns_without_failure(
+def test_conflict_fails_so_lambda_retries(
     auto_sync: ModuleType, aws: dict, caplog: pytest.LogCaptureFixture,
 ) -> None:
+    # Se o handler engolisse o conflito, o último arquivo de uma rajada ficaria fora da base.
     aws["admin_stub"].add_client_error(
         "start_ingestion_job", service_error_code="ConflictException",
     )
 
-    with caplog.at_level(logging.INFO):
-        response = auto_sync.handler(s3_event(), None)
+    with caplog.at_level(logging.INFO), pytest.raises(ClientError, match="ConflictException"):
+        auto_sync.handler(s3_event(), None)
 
-    assert response == {"started": False, "reason": "job em andamento"}
     assert "job em andamento" in caplog.text
     aws["admin_stub"].assert_no_pending_responses()
 

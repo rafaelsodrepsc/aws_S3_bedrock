@@ -28,9 +28,10 @@ def handler(event: dict, context: Any, client: Any = None) -> dict:
             dataSourceId=os.environ["DATA_SOURCE_ID"],
         )
     except ClientError as err:
-        if err.response["Error"]["Code"] != "ConflictException":
-            raise
-        # O sync é incremental: o próximo job pega os arquivos que chegaram agora.
-        log.info("job em andamento")
-        return {"started": False, "reason": "job em andamento"}
+        if err.response["Error"]["Code"] == "ConflictException":
+            # Já há um job rodando, e ele pode ter listado o bucket antes deste arquivo chegar.
+            # Falhar de propósito faz a Lambda repetir a invocação assíncrona (2 vezes, com
+            # espera de minutos); o sync é incremental, então a nova tentativa pega o arquivo.
+            log.info("job em andamento, a Lambda vai tentar de novo")
+        raise
     return {"started": True}
