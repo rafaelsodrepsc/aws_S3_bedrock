@@ -1,21 +1,32 @@
 # Infraestrutura da demo
 
-No console do CloudFormation, selecione `us-east-1`, crie uma stack e escolha
+No console do CloudFormation, selecione a região do seu projeto, crie uma stack e escolha
 **Upload a template file** com `infra/stack.yaml`. Preencha `AllowedOrigin`,
 aceite a criação de recursos IAM e aguarde `CREATE_COMPLETE`.
 
 - `AllowedOrigin`: origem exata da página de upload, como `http://localhost:8000`
   ou a URL HTTPS do túnel, sem caminho nem barra final; é obrigatório.
-- `PrimaryModelId`: modelo principal, por padrão `amazon.nova-micro-v1:0`.
-- `SecondaryModelId`: segundo modelo, por padrão `amazon.nova-lite-v1:0`.
-- `InferenceProfilePrefix`: geografia dos inference profiles (`us`, `eu` ou
-  `apac`), por padrão `us`; a região da stack e os modelos precisam oferecer
-  esses profiles, além de suportar S3 Vectors e Titan Text Embeddings V2.
+- `PrimaryModelId`: modelo principal, por padrão `amazon.nova-lite-v1:0`.
+- `SecondaryModelId`: segundo modelo para comparar na página `/chat`. Vazio
+  por padrão, e aí a demo usa só o principal.
+- `InferenceProfilePrefix`: `none` por padrão, que chama o modelo direto na
+  região da stack. `us`, `eu` ou `apac` usam inference profile, que distribui
+  as chamadas entre regiões.
 
-Os IDs dos modelos não incluem o prefixo geográfico. A stack monta os ARNs
-com a conta e a região atuais; `ModelArns` traz o principal primeiro.
-Consulte os [profiles disponíveis por região](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html)
-antes de mudar os padrões.
+O padrão é chamar o modelo direto na região porque projetos que só aceitam uma
+região podem bloquear o inference profile. Em `us-east-2`, o único modelo de
+texto da Amazon que roda direto na região é o Nova Lite; para comparar com o
+Nova Micro, informe `amazon.nova-micro-v1:0` em `SecondaryModelId` e `us` em
+`InferenceProfilePrefix`, se o seu projeto permitir. Para ver o que roda direto
+na sua região:
+
+```sh
+aws bedrock list-foundation-models --by-provider amazon \
+  --query "modelSummaries[?contains(inferenceTypesSupported,'ON_DEMAND')].modelId"
+```
+
+A região também precisa ter S3 Vectors e Titan Text Embeddings V2. Os IDs dos
+modelos não incluem o prefixo geográfico; `ModelArns` traz o principal primeiro.
 
 Nos Outputs, associe `BackendPolicyArn` à identidade IAM usada pelo backend.
 Com credenciais AWS configuradas e `AWS_DEFAULT_REGION` na região da stack,

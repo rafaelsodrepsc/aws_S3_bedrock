@@ -9,19 +9,26 @@ Parameters:
     ConstraintDescription: Informe uma origem como http://localhost:8000 ou https://demo.exemplo.com
   PrimaryModelId:
     Type: String
-    Default: amazon.nova-micro-v1:0
+    Default: amazon.nova-lite-v1:0
     Description: ID do modelo principal, sem o prefixo geográfico do inference profile
     AllowedPattern: '[a-z0-9][a-z0-9.:-]+'
   SecondaryModelId:
     Type: String
-    Default: amazon.nova-lite-v1:0
-    Description: ID do segundo modelo, sem o prefixo geográfico do inference profile
-    AllowedPattern: '[a-z0-9][a-z0-9.:-]+'
+    Default: ''
+    Description: ID de um segundo modelo para comparar (opcional; vazio usa só o principal)
+    AllowedPattern: '([a-z0-9][a-z0-9.:-]+)?'
   InferenceProfilePrefix:
     Type: String
-    Default: us
-    AllowedValues: [us, eu, apac]
-    Description: Prefixo geográfico dos profiles, compatível com a região e os modelos
+    Default: none
+    AllowedValues: [none, us, eu, apac]
+    Description: none chama o modelo direto na região da stack; us, eu ou apac usa inference profile entre regiões
+
+# Projetos que só aceitam uma região podem bloquear o inference profile entre regiões,
+# por isso o padrão é chamar o modelo direto na região da stack.
+Conditions:
+  UseProfile: !Not [!Equals [!Ref InferenceProfilePrefix, none]]
+  HasSecondary: !Not [!Equals [!Ref SecondaryModelId, '']]
+  SecondaryWithProfile: !And [!Condition UseProfile, !Condition HasSecondary]
 
 Resources:
   DocsBucket:
@@ -212,11 +219,26 @@ Resources:
           - Effect: Allow
             Action: bedrock:InvokeModel
             Resource:
-              - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${PrimaryModelId}'
-              - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${SecondaryModelId}'
-              # A região curinga permite os foundation models em cada destino do profile.
-              - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/${PrimaryModelId}'
-              - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/${SecondaryModelId}'
+              - !If
+                - UseProfile
+                - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${PrimaryModelId}'
+                - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${PrimaryModelId}'
+              # Com profile, a região curinga permite os foundation models em cada destino dele.
+              - !If
+                - UseProfile
+                - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/${PrimaryModelId}'
+                - !Ref AWS::NoValue
+              - !If
+                - HasSecondary
+                - !If
+                  - UseProfile
+                  - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${SecondaryModelId}'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${SecondaryModelId}'
+                - !Ref AWS::NoValue
+              - !If
+                - SecondaryWithProfile
+                - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/${SecondaryModelId}'
+                - !Ref AWS::NoValue
 
 Outputs:
   DocsBucket:
@@ -228,6 +250,16 @@ Outputs:
   BackendPolicyArn:
     Value: !Ref BackendPolicy
   ModelArns:
-    Value: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${PrimaryModelId},arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${SecondaryModelId}'
+    Description: Valor de MODEL_ARNS, com o modelo principal primeiro
+    Value: !If
+      - UseProfile
+      - !If
+        - HasSecondary
+        - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${PrimaryModelId},arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${SecondaryModelId}'
+        - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${PrimaryModelId}'
+      - !If
+        - HasSecondary
+        - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${PrimaryModelId},arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${SecondaryModelId}'
+        - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${PrimaryModelId}'
   Region:
     Value: !Ref AWS::Region

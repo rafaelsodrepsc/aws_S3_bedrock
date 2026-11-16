@@ -17,7 +17,7 @@ uv run pytest -q
 
 Antes de tudo, crie um alerta no AWS Budgets. A demo custa pouco, mas recurso esquecido ligado é o susto mais comum.
 
-1. Suba `infra/stack.yaml` pelo console do CloudFormation em `us-east-1`. O passo a passo e os parâmetros estão em `infra/README.md`.
+1. Suba `infra/stack.yaml` pelo console do CloudFormation, na região do seu projeto. O passo a passo e os parâmetros estão em `infra/README.md`.
 2. Associe a policy do output `BackendPolicyArn` ao usuário ou role que vai rodar o backend.
 3. Gere o `.env`:
 
@@ -41,13 +41,13 @@ Use um túnel com endereço fixo. O Quick Tunnel do Cloudflare muda de endereço
 
 - `/` recebe o PDF (até 5 MB). É o endereço do QR code. Com `?ttl=10` dá para mostrar a autorização expirando.
 - `/admin` lista os pendentes, abre cada PDF numa aba ("Ver") para você conferir, aprova ou rejeita, e dispara a sincronização. Só dá para aprovar depois de abrir o arquivo. A lista só aparece depois de clicar em "Mostrar lista", para você conferir antes de projetar.
-- `/chat` faz perguntas com fonte, mostra só a busca com os scores e troca entre os dois modelos da stack.
+- `/chat` faz perguntas com fonte, mostra só a busca com os scores e, se a stack tiver um segundo modelo, troca entre os dois.
 
 As duas últimas pedem o `ADMIN_TOKEN`, que fica guardado só na aba do navegador.
 
 ## O que mais tem aqui
 
-- `eval/`: mede se a busca acha o arquivo certo (acerto em k e MRR). Copie `eval/perguntas.example.json`, escreva suas perguntas e rode `uv run python -m eval.run --kb-id SEU_KB --arquivo eval/perguntas.json`. A `fonte_esperada` é o nome do arquivo dentro de `docs/`; os PDFs aprovados pela demo ficam com o nome do UUID gerado no upload.
+- `eval/`: mede se a busca acha o arquivo certo (acerto em k e MRR). Copie `eval/perguntas.example.json`, escreva suas perguntas e rode `uv run python -m eval.run --kb-id SEU_KB --region SUA_REGIAO --arquivo eval/perguntas.json`. A `fonte_esperada` é o nome do arquivo dentro de `docs/`; os PDFs aprovados pela demo ficam com o nome do UUID gerado no upload.
 - `lambda/auto_sync/`: Lambda que sincroniza a Knowledge Base quando um arquivo entra ou sai de `docs/`. É o passo seguinte da demo, que sincroniza na mão.
 
 ## Decisões que valem saber
