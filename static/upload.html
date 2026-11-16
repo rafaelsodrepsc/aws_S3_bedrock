@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Envie seu PDF</title>
+</head>
+<body>
+  <h1>Envie um PDF (até 5 MB)</h1>
+  <input type="file" id="file" accept="application/pdf">
+  <button id="send">Enviar</button>
+  <p id="status"></p>
+  <script>
+    const status = document.getElementById("status");
+    const fileInput = document.getElementById("file");
+    let auth = null;
+
+    // A autorização é pedida ao escolher o arquivo e usada no clique em enviar.
+    // Com ?ttl=10 na URL dá para mostrar a autorização expirando.
+    fileInput.onchange = async () => {
+      status.textContent = "Pedindo autorização...";
+      try {
+        const res = await fetch("/upload-url" + location.search, { method: "POST" });
+        if (!res.ok) throw new Error(`Falha ao pedir autorização (${res.status})`);
+        auth = await res.json();
+        status.textContent = "Pronto para enviar.";
+      } catch (err) {
+        auth = null;
+        status.textContent = err.message;
+      }
+    };
+
+    document.getElementById("send").onclick = async () => {
+      const file = fileInput.files[0];
+      if (!file || !auth) { status.textContent = "Escolha um PDF."; return; }
+      const form = new FormData();
+      Object.entries(auth.fields).forEach(([k, v]) => form.append(k, v));
+      form.append("file", file); // o arquivo precisa ser o último campo
+      try {
+        const up = await fetch(auth.url, { method: "POST", body: form });
+        status.textContent = up.ok
+          ? "Recebido! Ele entra na base depois da moderação."
+          : `O S3 recusou o envio (${up.status}): arquivo grande demais ou autorização expirada.`;
+      } catch (err) {
+        status.textContent = "Falha de rede ao enviar.";
+      }
+    };
+  </script>
+</body>
+</html>
