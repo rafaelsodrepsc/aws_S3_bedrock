@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Recursos da demo Do bucket à IA
+
+Parameters:
+  AllowedOrigin:
+    Type: String
+    Description: Origem do site com protocolo e porta, sem caminho ou barra final
+    AllowedPattern: 'https?://[^/\s*?#]+'
+    ConstraintDescription: Informe uma origem como http://localhost:8000 ou https://demo.exemplo.com
+  PrimaryModelId:
+    Type: String
+    Default: amazon.nova-micro-v1:0
+    Description: ID do modelo principal, sem o prefixo geográfico do inference profile
+    AllowedPattern: '[a-z0-9][a-z0-9.:-]+'
+  SecondaryModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+    Description: ID do segundo modelo, sem o prefixo geográfico do inference profile
+    AllowedPattern: '[a-z0-9][a-z0-9.:-]+'
+  InferenceProfilePrefix:
+    Type: String
+    Default: us
+    AllowedValues: [us, eu, apac]
+    Description: Prefixo geográfico dos profiles, compatível com a região e os modelos
+
+Resources:
+  DocsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [POST]
+            AllowedOrigins: [!Ref AllowedOrigin]
+            AllowedHeaders: ['*']
+            MaxAge: 3000
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpirePending
+            Status: Enabled
+            Prefix: pendentes/
+            ExpirationInDays: 1
+          - Id: AbortIncompleteUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+
+  DocsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DocsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt DocsBucket.Arn
+              - !Sub '${DocsBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  VectorBucket:
+    Type: AWS::S3Vectors::VectorBucket
+    Properties:
+      EncryptionConfiguration:
+        SseType: AES256
+
+  VectorIndex:
+    Type: AWS::S3Vectors::Index
+    Properties:
+      VectorBucketArn: !GetAtt VectorBucket.VectorBucketArn
+      IndexName: documentos
+      Dimension: 1024
+      DataType: float32
+      DistanceMetric: cosine
+      MetadataConfiguration:
+        # O texto dos trechos não pode consumir o limite de 2 KB de metadados filtráveis.
+        NonFilterableMetadataKeys:
+          - AMAZON_BEDROCK_TEXT
+          - AMAZON_BEDROCK_METADATA
+
+  KnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  KnowledgeBasePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: knowledge-base
+      Roles: [!Ref KnowledgeBaseRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: bedrock:InvokeModel
+            Resource: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0'
+          - Effect: Allow
+            Action: s3:GetObject
+            Resource: !Sub '${DocsBucket.Arn}/docs/*'
+          - Effect: Allow
+            Action: s3:ListBucket
+            Resource: !GetAtt DocsBucket.Arn
+            Condition:
+              StringEquals:
+                s3:prefix: docs/
+          - Effect: Allow
+            Action:
+              - s3vectors:PutVectors
+              - s3vectors:GetVectors
+              - s3vectors:DeleteVectors
+              - s3vectors:QueryVectors
+              - s3vectors:GetIndex
+            Resource: !GetAtt VectorIndex.IndexArn
+
+  KnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    DependsOn: KnowledgeBasePolicy
+    Properties:
+      Name: do-bucket-a-ia
+      RoleArn: !GetAtt KnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0'
+          EmbeddingModelConfiguration:
+            BedrockEmbeddingModelConfiguration:
+              Dimensions: 1024
+              EmbeddingDataType: FLOAT32
+      StorageConfiguration:
+        Type: S3_VECTORS
+        S3VectorsConfiguration:
+          IndexArn: !GetAtt VectorIndex.IndexArn
+
+  DataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      Name: documentos
+      KnowledgeBaseId: !Ref KnowledgeBase
+      DataDeletionPolicy: DELETE
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt DocsBucket.Arn
+          InclusionPrefixes: [docs/]
+      VectorIngestionConfiguration:
+        ChunkingConfiguration:
+          ChunkingStrategy: FIXED_SIZE
+          FixedSizeChunkingConfiguration:
+            MaxTokens: 300
+            OverlapPercentage: 20
+
+  BackendPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Permissões do backend da demo Do bucket à IA
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: [s3:PutObject, s3:GetObject, s3:DeleteObject]
+            Resource: !Sub '${DocsBucket.Arn}/pendentes/*'
+          - Effect: Allow
+            Action: s3:PutObject
+            Resource: !Sub '${DocsBucket.Arn}/docs/*'
+          - Effect: Allow
+            Action: s3:ListBucket
+            Resource: !GetAtt DocsBucket.Arn
+            Condition:
+              StringLike:
+                s3:prefix: pendentes/*
+          - Effect: Allow
+            Action: [bedrock:StartIngestionJob, bedrock:GetIngestionJob, bedrock:Retrieve]
+            Resource: !GetAtt KnowledgeBase.KnowledgeBaseArn
+          - Effect: Allow
+            Action: bedrock:RetrieveAndGenerate
+            Resource: '*'
+          - Effect: Allow
+            Action: bedrock:InvokeModel
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${PrimaryModelId}'
+              - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${SecondaryModelId}'
+              # A região curinga permite os foundation models em cada destino do profile.
+              - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/${PrimaryModelId}'
+              - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/${SecondaryModelId}'
+
+Outputs:
+  DocsBucket:
+    Value: !Ref DocsBucket
+  KnowledgeBaseId:
+    Value: !Ref KnowledgeBase
+  DataSourceId:
+    Value: !GetAtt DataSource.DataSourceId
+  BackendPolicyArn:
+    Value: !Ref BackendPolicy
+  ModelArns:
+    Value: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${PrimaryModelId},arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${InferenceProfilePrefix}.${SecondaryModelId}'
+  Region:
+    Value: !Ref AWS::Region
