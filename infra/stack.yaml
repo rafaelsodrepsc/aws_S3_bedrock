@@ -121,12 +121,14 @@ Resources:
           - Effect: Allow
             Action: s3:GetObject
             Resource: !Sub '${DocsBucket.Arn}/docs/*'
+          # Igual ao exemplo da documentação da KB: sem condição de prefixo, porque o sync
+          # pode listar de um jeito que não bate com docs/ e falhar com AccessDenied.
           - Effect: Allow
             Action: s3:ListBucket
             Resource: !GetAtt DocsBucket.Arn
             Condition:
               StringEquals:
-                s3:prefix: docs/
+                aws:ResourceAccount: !Ref AWS::AccountId
           - Effect: Allow
             Action:
               - s3vectors:PutVectors
