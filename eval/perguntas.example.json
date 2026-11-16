@@ -1,0 +1,22 @@
+[
+  {
+    "pergunta": "Qual é o prazo para solicitar trancamento na Universidade Fictícia do Sertão?",
+    "fonte_esperada": "regimento.pdf"
+  },
+  {
+    "pergunta": "Qual é a frequência mínima exigida para aprovação nas disciplinas?",
+    "fonte_esperada": "regimento.pdf"
+  },
+  {
+    "pergunta": "Como o estudante pode pedir revisão da nota de uma avaliação?",
+    "fonte_esperada": "regimento.pdf"
+  },
+  {
+    "pergunta": "Por quantos semestres o estudante pode manter a matrícula trancada?",
+    "fonte_esperada": "regimento.pdf"
+  },
+  {
+    "pergunta": "Quais são os requisitos para solicitar transferência interna de curso?",
+    "fonte_esperada": "regimento.pdf"
+  }
+]
