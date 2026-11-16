@@ -56,6 +56,11 @@ def test_ask_with_second_model(client, aws, admin):
     assert resp.json()["model"] == MODEL_B
 
 
+def test_models_lists_allowlist_for_admin(client, admin):
+    assert client.get("/admin/models").status_code == 401
+    assert client.get("/admin/models", headers=admin).json() == {"models": [MODEL_A, MODEL_B]}
+
+
 def test_ask_refuses_model_outside_allowlist(client, admin):
     resp = client.post(
         "/ask",

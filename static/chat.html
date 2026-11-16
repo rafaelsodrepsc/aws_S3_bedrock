@@ -56,6 +56,22 @@
 
     tokenInput.value = sessionStorage.getItem("adminToken") || "";
     tokenInput.oninput = () => sessionStorage.setItem("adminToken", tokenInput.value);
+    tokenInput.onchange = () => loadModels();
+
+    // Preenche a lista com os modelos permitidos no backend, para comparar pequeno e grande.
+    async function loadModels() {
+      try {
+        const res = await fetch("/admin/models", {
+          headers: { "x-admin-token": sessionStorage.getItem("adminToken") || "" },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        (data.models || []).forEach(rememberModel);
+      } catch {
+        // sem lista, o envio usa o modelo padrão
+      }
+    }
+    if (tokenInput.value) loadModels();
 
     function fileName(uri) {
       return (uri || "").split("/").pop() || uri || "";

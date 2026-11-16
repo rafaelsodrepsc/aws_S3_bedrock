@@ -232,6 +232,11 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
             "failure_reasons": job.get("failureReasons", []),
         }
 
+    @app.get("/admin/models")
+    def list_models(x_admin_token: str | None = Header(default=None)) -> dict:
+        require_admin(x_admin_token)
+        return {"models": list(settings.model_arns)}
+
     @app.post("/ask")
     def ask(req: AskRequest, x_admin_token: str | None = Header(default=None)) -> dict:
         # Só o apresentador pergunta: cada pergunta custa tokens.
