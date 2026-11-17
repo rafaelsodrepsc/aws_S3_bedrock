@@ -19,9 +19,10 @@ Antes de tudo, crie um alerta no AWS Budgets. A demo custa pouco, mas recurso es
 
 1. Suba `infra/stack.yaml` pelo console do CloudFormation, na região do seu projeto. O passo a passo e os parâmetros estão em `infra/README.md`.
 2. Associe a policy do output `BackendPolicyArn` ao usuário ou role que vai rodar o backend.
-3. Gere o `.env`:
+3. Gere o `.env`. Se você entra com `aws login`, informe o perfil e a região:
 
    ```sh
+   export AWS_PROFILE=seu-perfil AWS_REGION=sua-regiao
    uv run python scripts/env_from_stack.py nome-da-stack > .env
    echo "ADMIN_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(24))')" >> .env
    ```
@@ -30,6 +31,7 @@ Antes de tudo, crie um alerta no AWS Budgets. A demo custa pouco, mas recurso es
 
    ```sh
    set -a && source .env && set +a
+   export AWS_PROFILE=seu-perfil
    uv run uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
    ```
 
@@ -57,7 +59,8 @@ As duas últimas pedem o `ADMIN_TOKEN`, que fica guardado só na aba do navegado
 - O S3 só confere o `Content-Type` declarado. Por isso, ao abrir um arquivo para conferir, o backend lê os primeiros bytes e recusa o que não começa com `%PDF-`.
 - A autorização de upload continua valendo por alguns minutos, então quem enviou poderia trocar o arquivo depois que você conferiu. Por isso "Ver" guarda uma cópia em `revisao/`, onde a autorização não grava, e a aprovação publica essa cópia.
 - Há um teto de autorizações por minuto para todo mundo e, com `CLIENT_IP_HEADER=cf-connecting-ip` no Cloudflare Tunnel, um limite por pessoa. Sem esse header o limite por pessoa fica desligado, porque atrás do túnel todo mundo chega com o mesmo IP.
-- O lifecycle do bucket apaga `pendentes/` depois de um dia.
+- O lifecycle do bucket apaga `pendentes/` e `revisao/` depois de um dia.
+- O `/ask` usa um prompt em português, traduzido do padrão do Bedrock. Com o padrão em inglês, o modelo respondia em inglês quando não achava a resposta.
 
 ## Apagar tudo
 
