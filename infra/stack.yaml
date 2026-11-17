@@ -199,17 +199,18 @@ Resources:
               - !Sub '${DocsBucket.Arn}/pendentes/*'
               # Cópia que o moderador abre e que a aprovação publica.
               - !Sub '${DocsBucket.Arn}/revisao/*'
+          # Publicar, ler o nome original (metadado) e excluir pela barra lateral.
           - Effect: Allow
-            Action: s3:PutObject
+            Action: [s3:PutObject, s3:GetObject, s3:DeleteObject]
             Resource: !Sub '${DocsBucket.Arn}/docs/*'
-          # Listar só os prefixos de trabalho. Para saber se a cópia de revisão existe, o
+          # Listar só os prefixos da demo. Para saber se a cópia de revisão existe, o
           # backend lista o prefixo dela: GetObject não carrega s3:prefix e daria 403.
           - Effect: Allow
             Action: s3:ListBucket
             Resource: !GetAtt DocsBucket.Arn
             Condition:
               StringLike:
-                s3:prefix: [pendentes/*, revisao/*]
+                s3:prefix: [pendentes/*, revisao/*, docs/*]
           - Effect: Allow
             Action: [bedrock:StartIngestionJob, bedrock:GetIngestionJob, bedrock:Retrieve]
             Resource: !GetAtt KnowledgeBase.KnowledgeBaseArn

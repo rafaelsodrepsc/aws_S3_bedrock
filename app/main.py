@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, unquote
 
 import boto3
 from botocore.config import Config
@@ -27,6 +28,11 @@ DOCS_PREFIX = "docs/"
 REVIEW_PREFIX = "revisao/"
 UUID_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 PENDING_KEY_PATTERN = rf"^pendentes/{UUID_PATTERN}\.pdf$"
+DOC_KEY_PATTERN = rf"^docs/{UUID_PATTERN}\.pdf$"
+# Nome original do arquivo, guardado como x-amz-meta-nome. Copiar o objeto mantém o metadado.
+NAME_META = "nome"
+NAME_FIELD = f"x-amz-meta-{NAME_META}"
+MAX_NAME_CHARS = 120
 PDF_MAGIC = b"%PDF-"
 NOT_FOUND_ANSWER = "Não encontrei essa informação nos documentos enviados."
 # O prompt padrão do RetrieveAndGenerate é em inglês e o modelo responde em inglês quando
@@ -129,6 +135,16 @@ class PendingKey(BaseModel):
     key: str = Field(pattern=PENDING_KEY_PATTERN)
 
 
+class DocKey(BaseModel):
+    key: str = Field(pattern=DOC_KEY_PATTERN)
+
+
+def clean_name(raw: str) -> str:
+    # Fica só o nome do arquivo, sem caminho nem caractere de controle.
+    name = raw.replace("\\", "/").rsplit("/", 1)[-1]
+    return "".join(ch for ch in name if ch.isprintable()).strip()[:MAX_NAME_CHARS]
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=3, max_length=500)
     model: str | None = None
@@ -184,7 +200,9 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
         return FileResponse(STATIC_DIR / "admin.html")
 
     @app.post("/upload-url")
-    def create_upload_url(request: Request, ttl: int = settings.upload_ttl_seconds) -> dict:
+    def create_upload_url(
+        request: Request, ttl: int = settings.upload_ttl_seconds, name: str = ""
+    ) -> dict:
         # Por cliente primeiro, para um script em loop não gastar a cota da plateia inteira.
         header = settings.client_ip_header
         if header and not client_limiter.allow(client_id(request, header)):
@@ -195,13 +213,19 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
         ttl = max(5, min(ttl, settings.upload_ttl_seconds))
         # A chave é gerada aqui: o cliente nunca escolhe nome nem prefixo.
         key = f"{PENDING_PREFIX}{uuid.uuid4()}.pdf"
+        fields = {"Content-Type": "application/pdf"}
+        # O nome original só serve para exibir. Vai como metadado com valor fixo na política,
+        # codificado em ASCII porque o S3 não aceita qualquer caractere em metadado.
+        display = clean_name(name)
+        if display:
+            fields[NAME_FIELD] = quote(display, safe="")
         try:
             post = s3.generate_presigned_post(
                 Bucket=settings.bucket,
                 Key=key,
-                Fields={"Content-Type": "application/pdf"},
+                Fields=fields,
                 Conditions=[
-                    {"Content-Type": "application/pdf"},
+                    *({k: v} for k, v in fields.items()),
                     ["content-length-range", 1, settings.max_upload_bytes],
                 ],
                 ExpiresIn=ttl,
@@ -211,24 +235,54 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
         log.info("upload_url_issued", extra={"ctx": {"key": key, "ttl": ttl}})
         return post
 
-    @app.get("/admin/pending")
-    def list_pending(x_admin_token: str | None = Header(default=None)) -> list[dict]:
-        require_admin(x_admin_token)
+    def display_name(key: str) -> str | None:
+        try:
+            meta = s3.head_object(Bucket=settings.bucket, Key=key).get("Metadata", {})
+        except ClientError as err:
+            # Saiu entre a listagem e a leitura (aprovado ou excluído): fica sem nome.
+            if err.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                return None
+            raise
+        return unquote(meta.get(NAME_META, "")) or None
+
+    def list_files(prefix: str) -> list[dict]:
         try:
             pages = s3.get_paginator("list_objects_v2").paginate(
-                Bucket=settings.bucket, Prefix=PENDING_PREFIX
+                Bucket=settings.bucket, Prefix=prefix
             )
+            objects = [o for page in pages for o in page.get("Contents", [])]
             return [
                 {
                     "key": o["Key"],
+                    "name": display_name(o["Key"]),
                     "size": o["Size"],
                     "last_modified": o["LastModified"].isoformat(),
                 }
-                for page in pages
-                for o in page.get("Contents", [])
+                for o in objects
             ]
         except (ClientError, BotoCoreError) as err:
             raise aws_failure("list_objects_v2", err) from err
+
+    @app.get("/admin/pending")
+    def list_pending(x_admin_token: str | None = Header(default=None)) -> list[dict]:
+        require_admin(x_admin_token)
+        return list_files(PENDING_PREFIX)
+
+    @app.get("/admin/docs")
+    def list_docs(x_admin_token: str | None = Header(default=None)) -> list[dict]:
+        require_admin(x_admin_token)
+        return list_files(DOCS_PREFIX)
+
+    @app.post("/admin/docs/delete")
+    def delete_doc(req: DocKey, x_admin_token: str | None = Header(default=None)) -> dict:
+        # Só tira do bucket. A Knowledge Base esquece o documento no próximo sync.
+        require_admin(x_admin_token)
+        try:
+            s3.delete_object(Bucket=settings.bucket, Key=req.key)
+        except (ClientError, BotoCoreError) as err:
+            raise aws_failure("delete_doc", err) from err
+        log.info("document_deleted", extra={"ctx": {"key": req.key}})
+        return {"key": req.key}
 
     def review_key(pending_key: str) -> str:
         return REVIEW_PREFIX + pending_key.removeprefix(PENDING_PREFIX)
@@ -286,8 +340,8 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
         snapshot = review_key(req.key)
         target = DOCS_PREFIX + req.key.removeprefix(PENDING_PREFIX)
         try:
-            # Existência pela listagem do prefixo: a policy do backend não dá ListBucket fora
-            # de pendentes/ e revisao/, e sem isso o S3 responde 403 para chave inexistente.
+            # Existência pela listagem do prefixo: a policy do backend só dá ListBucket nos
+            # prefixos da demo, e sem ListBucket o S3 responde 403 para chave inexistente.
             listed = s3.list_objects_v2(Bucket=settings.bucket, Prefix=snapshot, MaxKeys=1)
             if not any(o["Key"] == snapshot for o in listed.get("Contents", [])):
                 raise HTTPException(

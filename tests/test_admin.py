@@ -253,3 +253,47 @@ def test_sync_status(client, aws, admin):
     body = resp.json()
     assert body["status"] == "COMPLETE"
     assert body["statistics"]["numberOfNewDocumentsIndexed"] == 2
+
+
+def test_docs_routes_require_token(client):
+    assert client.get("/admin/docs").status_code == 401
+    assert client.post("/admin/docs/delete", json={"key": APPROVED}).status_code == 401
+
+
+def test_list_docs_shows_original_name(client, aws, admin):
+    aws["s3"].put_object(
+        Bucket=BUCKET,
+        Key=APPROVED,
+        Body=b"%PDF-1.7",
+        Metadata={"nome": "Regimento%20Acad%C3%AAmico.pdf"},
+    )
+    aws["s3"].put_object(Bucket=BUCKET, Key=PENDING, Body=b"%PDF-1.7")
+
+    resp = client.get("/admin/docs", headers=admin)
+
+    assert resp.status_code == 200
+    assert [(d["key"], d["name"]) for d in resp.json()] == [(APPROVED, "Regimento Acadêmico.pdf")]
+
+
+def test_approve_keeps_the_original_name(client, aws, admin):
+    aws["s3"].put_object(Bucket=BUCKET, Key=PENDING, Body=b"%PDF-1.7", Metadata={"nome": "a.pdf"})
+    client.post("/admin/review", json={"key": PENDING}, headers=admin)
+    client.post("/admin/approve", json={"key": PENDING}, headers=admin)
+
+    assert client.get("/admin/docs", headers=admin).json()[0]["name"] == "a.pdf"
+
+
+def test_delete_doc_removes_only_that_document(client, aws, admin):
+    other = APPROVED.replace("0b8f3c2e", "1c9f3c2e")
+    aws["s3"].put_object(Bucket=BUCKET, Key=APPROVED, Body=b"%PDF-1.7")
+    aws["s3"].put_object(Bucket=BUCKET, Key=other, Body=b"%PDF-1.7")
+
+    resp = client.post("/admin/docs/delete", json={"key": APPROVED}, headers=admin)
+
+    assert resp.status_code == 200
+    assert keys(aws["s3"], "docs/") == [other]
+
+
+@pytest.mark.parametrize("key", [PENDING, "docs/../pendentes/x.pdf", "docs/regimento.pdf", REVIEW])
+def test_delete_doc_accepts_only_document_keys(client, admin, key):
+    assert client.post("/admin/docs/delete", json={"key": key}, headers=admin).status_code == 422

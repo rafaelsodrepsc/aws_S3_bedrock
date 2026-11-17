@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from app.main import RateLimiter
+from app.main import RateLimiter, clean_name
 from app.settings import Settings
 
 
@@ -133,3 +133,20 @@ def test_settings_parse_model_list(monkeypatch):
         monkeypatch.setenv(name, value)
 
     assert Settings.from_env().model_arns == ("arn:a", "arn:b")
+
+
+def test_upload_url_pins_the_original_name(client):
+    post = client.post("/upload-url", params={"name": "C:\\fotos\\Regimento Acadêmico.pdf"}).json()
+
+    encoded = "Regimento%20Acad%C3%AAmico.pdf"
+    assert post["fields"]["x-amz-meta-nome"] == encoded
+    assert {"x-amz-meta-nome": encoded} in decode_policy(post)["conditions"]
+
+
+def test_upload_url_without_name_has_no_name_field(client):
+    assert "x-amz-meta-nome" not in client.post("/upload-url").json()["fields"]
+
+
+def test_clean_name_drops_control_characters_and_caps_length():
+    assert clean_name("a\nb\x00c.pdf") == "abc.pdf"
+    assert len(clean_name("x" * 500)) == 120
