@@ -37,3 +37,12 @@ def test_pages_and_shared_script_use_safe_dom(client, path):
         "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "localStorage",
     ):
         assert forbidden not in source
+
+
+@pytest.mark.parametrize("path", ["/", "/chat", "/admin", "/static/app.css", "/static/docs.js"])
+def test_front_is_revalidated_so_old_pages_do_not_stick(client, path):
+    assert client.get(path).headers["cache-control"] == "no-cache"
+
+
+def test_api_responses_keep_their_own_cache_headers(client):
+    assert "cache-control" not in client.post("/upload-url").headers

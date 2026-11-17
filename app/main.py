@@ -183,6 +183,16 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
     app = FastAPI(title="Do bucket à IA")
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+    @app.middleware("http")
+    async def revalidate_front(request: Request, call_next: Callable) -> Any:
+        response = await call_next(request)
+        # Sem Cache-Control o navegador usa cache heurístico e mostra a tela antiga por horas.
+        # no-cache só obriga a revalidar pelo ETag, então continua barato.
+        path = request.url.path
+        if path in ("/", "/admin", "/chat") or path.startswith("/static/"):
+            response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
     def require_admin(token: str | None) -> None:
         if token is None or not secrets.compare_digest(
             token.encode(), settings.admin_token.encode()
