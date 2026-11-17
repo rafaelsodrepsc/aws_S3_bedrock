@@ -16,6 +16,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.settings import Settings
@@ -180,6 +181,7 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
         return forwarded.split(",")[0].strip() or "sem-header"
 
     app = FastAPI(title="Do bucket à IA")
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     def require_admin(token: str | None) -> None:
         if token is None or not secrets.compare_digest(

@@ -3,53 +3,124 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Envie seu PDF</title>
+  <title>Envie seu PDF | Do bucket à IA</title>
+  <link rel="stylesheet" href="/static/app.css">
 </head>
-<body>
-  <h1>Envie um PDF (até 5 MB)</h1>
-  <input type="file" id="file" accept="application/pdf">
-  <button id="send">Enviar</button>
-  <p id="status"></p>
+<body class="upload-page">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">↗</span> Do bucket à IA</div>
+    <span class="eyebrow">Minicurso ao vivo</span>
+  </header>
+  <main class="upload-main">
+    <section class="card upload-card" aria-labelledby="title">
+      <p class="eyebrow">Participe do minicurso</p>
+      <h1 id="title">Envie seu PDF.</h1>
+      <p class="subtitle">Envie um documento para a base de conhecimento do minicurso.</p>
+      <div class="drop-zone" id="drop-zone">
+        <span class="pdf-mark" aria-hidden="true">PDF ↑</span>
+        <p>Solte seu PDF aqui ou</p>
+        <label class="file-picker" for="file">Escolher PDF</label>
+        <input type="file" id="file" accept="application/pdf,.pdf" aria-describedby="file-help file-details">
+        <p class="meta" id="file-help">Só PDF, até 5 MB por arquivo.</p>
+      </div>
+      <p id="file-details" class="file-details meta">Nenhum arquivo escolhido.</p>
+      <p class="notice">Seu documento entra na base depois da aprovação do apresentador.</p>
+      <button id="send" class="primary" disabled>Enviar documento</button>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </section>
+    <p class="footer-note">O apresentador revisa cada envio antes da sincronização.</p>
+  </main>
   <script>
-    const status = document.getElementById("status");
-    const fileInput = document.getElementById("file");
+    const statusEl = document.getElementById('status');
+    const fileInput = document.getElementById('file');
+    const sendButton = document.getElementById('send');
+    const fileDetails = document.getElementById('file-details');
+    const dropZone = document.getElementById('drop-zone');
     let auth = null;
+    let selectedFile = null;
+    let selection = 0;
+    let uploading = false;
 
-    // A autorização é pedida ao escolher o arquivo e usada no clique em enviar.
-    // Com ?ttl=10 na URL dá para mostrar a autorização expirando.
-    fileInput.onchange = async () => {
-      // A autorização anterior aponta para a chave do arquivo anterior: descarta antes de pedir outra.
+    function showStatus(text, state) {
+      statusEl.textContent = text;
+      statusEl.dataset.state = state;
+    }
+
+    async function selectFile(file) {
+      if (uploading) return;
+      const version = ++selection;
       auth = null;
-      status.textContent = "Pedindo autorização...";
+      selectedFile = file || null;
+      sendButton.disabled = true;
+      fileDetails.textContent = file
+        ? `${file.name} · ${(file.size / 1024 / (file.size >= 1048576 ? 1024 : 1)).toFixed(1)} ${file.size >= 1048576 ? 'MB' : 'KB'}`
+        : 'Nenhum arquivo escolhido.';
+      if (!file) { showStatus('Escolha um PDF.', 'info'); return; }
+      if (!file.name.toLowerCase().endsWith('.pdf')) {
+        showStatus('Escolha um arquivo PDF.', 'error');
+        return;
+      }
+      // A autorização começa na escolha para preservar a demo com ?ttl=10.
+      showStatus('Pedindo autorização...', 'loading');
+      const params = new URLSearchParams(location.search);
+      params.set('name', file.name);
       try {
-        const res = await fetch("/upload-url" + location.search, { method: "POST" });
+        const res = await fetch(`/upload-url?${params}`, { method: 'POST' });
         if (!res.ok) throw new Error(`Falha ao pedir autorização (${res.status})`);
-        auth = await res.json();
-        status.textContent = "Pronto para enviar.";
-      } catch (err) {
+        const data = await res.json();
+        if (version !== selection) return;
+        auth = data;
+        sendButton.disabled = false;
+        showStatus('Pronto para enviar.', 'success');
+      } catch (error) {
+        if (version !== selection) return;
         auth = null;
-        status.textContent = err.message;
+        showStatus(error.message, 'error');
+      }
+    }
+
+    fileInput.onchange = () => selectFile(fileInput.files[0]);
+    dropZone.ondragover = (event) => {
+      event.preventDefault();
+      if (!uploading) dropZone.classList.add('dragging');
+    };
+    dropZone.ondragleave = () => dropZone.classList.remove('dragging');
+    dropZone.ondrop = (event) => {
+      event.preventDefault();
+      dropZone.classList.remove('dragging');
+      if (!uploading) {
+        fileInput.value = '';
+        selectFile(event.dataTransfer.files[0]);
       }
     };
 
-    document.getElementById("send").onclick = async () => {
-      const file = fileInput.files[0];
-      if (!file || !auth) { status.textContent = "Escolha um PDF."; return; }
+    sendButton.onclick = async () => {
+      if (uploading) return;
+      if (!selectedFile || !auth) { showStatus('Escolha um PDF.', 'info'); return; }
       const form = new FormData();
-      Object.entries(auth.fields).forEach(([k, v]) => form.append(k, v));
-      form.append("file", file); // o arquivo precisa ser o último campo
+      Object.entries(auth.fields).forEach(([key, value]) => form.append(key, value));
+      form.append('file', selectedFile); // O arquivo precisa ser o último campo.
+      uploading = true;
+      sendButton.disabled = true;
+      fileInput.disabled = true;
+      showStatus('Enviando documento...', 'loading');
       try {
-        const up = await fetch(auth.url, { method: "POST", body: form });
+        const up = await fetch(auth.url, { method: 'POST', body: form });
         if (up.ok) {
-          // Cada autorização é de uma chave só; o próximo envio pede outra.
           auth = null;
-          fileInput.value = "";
-          status.textContent = "Recebido! Ele entra na base depois da moderação.";
+          selectedFile = null;
+          fileInput.value = '';
+          fileDetails.textContent = 'Nenhum arquivo escolhido.';
+          showStatus('Recebido! Ele entra na base depois da moderação.', 'success');
         } else {
-          status.textContent = `O S3 recusou o envio (${up.status}): arquivo grande demais ou autorização expirada.`;
+          showStatus(`O S3 recusou o envio (${up.status}): arquivo grande demais ou autorização expirada.`, 'error');
         }
-      } catch (err) {
-        status.textContent = "Falha de rede ao enviar.";
+      } catch {
+        showStatus('Falha de rede ao enviar.', 'error');
+      } finally {
+        uploading = false;
+        fileInput.disabled = false;
+        sendButton.disabled = !auth;
       }
     };
   </script>

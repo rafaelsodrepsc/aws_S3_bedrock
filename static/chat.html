@@ -3,174 +3,195 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Perguntas à Base de Conhecimento</title>
-  <style>
-    body { font-family: sans-serif; font-size: 1.25rem; line-height: 1.5; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
-    input, select, button { font-size: 1.1rem; padding: 0.4rem 0.6rem; margin: 0.25rem 0; }
-    #question { width: 100%; box-sizing: border-box; }
-    .meta { color: #444; font-size: 1rem; }
-    li { margin-bottom: 0.75rem; }
-  </style>
+  <title>Perguntas | Do bucket à IA</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/docs.js"></script>
 </head>
 <body>
-  <h1>Perguntas à Base de Conhecimento</h1>
-  <div>
-    <label for="token">Token de administração:</label>
-    <input type="password" id="token" placeholder="x-admin-token">
-  </div>
-  <div>
-    <label for="question">Pergunta:</label>
-    <input type="text" id="question" placeholder="Digite sua pergunta...">
-  </div>
-  <div>
-    <label for="model">Modelo:</label>
-    <select id="model">
-      <option value="">Padrão</option>
-    </select>
-    <button id="ask">Perguntar</button>
-    <button id="search">Só a busca</button>
-  </div>
-  <p id="status"></p>
-  <section id="answer-section" hidden>
-    <h2>Resposta</h2>
-    <p id="answer"></p>
-    <p id="meta" class="meta"></p>
-    <h3>Fontes</h3>
-    <ul id="sources"></ul>
-  </section>
-  <section id="search-section" hidden>
-    <h2>Resultados da busca</h2>
-    <ul id="results"></ul>
-  </section>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">↗</span> Do bucket à IA</div>
+    <nav aria-label="Navegação"><a href="/">Enviar PDF</a><a href="/admin">Moderação</a><a href="/chat" aria-current="page">Perguntas</a></nav>
+  </header>
+  <main class="workspace">
+    <div class="page-heading">
+      <p class="eyebrow">Explore o conhecimento da turma</p>
+      <h1>Pergunte aos documentos.</h1>
+      <p class="subtitle">Da sua pergunta a uma resposta com fontes.</p>
+    </div>
+    <div class="token-row">
+      <label for="token">Token de administração</label>
+      <input type="password" id="token" placeholder="x-admin-token" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="layout">
+      <aside aria-label="Base de conhecimento"><details id="documents"></details></aside>
+      <div class="content chat-content">
+        <section class="card" aria-labelledby="question-title">
+          <h2 id="question-title">O que você quer descobrir?</h2>
+          <form id="question-form">
+            <label for="question">Sua pergunta</label>
+            <input type="text" id="question" class="question" placeholder="Digite sua pergunta..." minlength="3" maxlength="500" required>
+            <div class="actions">
+              <div class="model-field">
+                <label for="model">Modelo</label>
+                <select id="model"><option value="">Padrão</option></select>
+              </div>
+              <button id="ask" type="submit" class="primary">Perguntar</button>
+              <button id="search" type="button">Só a busca</button>
+            </div>
+          </form>
+          <p id="model-status" class="status meta" role="status"></p>
+          <p id="status" class="status" role="status">Faça uma pergunta para começar.</p>
+        </section>
+        <section id="answer-section" class="card answer-card" aria-labelledby="answer-title" hidden>
+          <p class="eyebrow">Com base nos documentos</p>
+          <h2 id="answer-title">Resposta</h2>
+          <p id="answer" class="answer-text"></p>
+          <p id="meta" class="meta"></p>
+          <div id="sources-block">
+            <h3>Fontes</h3>
+            <ul id="sources"></ul>
+          </div>
+        </section>
+        <section id="search-section" class="card" aria-labelledby="search-title" hidden>
+          <p class="eyebrow">Trechos encontrados</p>
+          <h2 id="search-title">Resultados da busca</h2>
+          <ul id="results"></ul>
+        </section>
+      </div>
+    </div>
+  </main>
   <script>
-    const tokenInput = document.getElementById("token");
-    const questionInput = document.getElementById("question");
-    const modelSelect = document.getElementById("model");
-    const statusEl = document.getElementById("status");
-    const answerSection = document.getElementById("answer-section");
-    const answerEl = document.getElementById("answer");
-    const metaEl = document.getElementById("meta");
-    const sourcesEl = document.getElementById("sources");
-    const searchSection = document.getElementById("search-section");
-    const resultsEl = document.getElementById("results");
-
-    tokenInput.value = sessionStorage.getItem("adminToken") || "";
-    tokenInput.oninput = () => sessionStorage.setItem("adminToken", tokenInput.value);
-    tokenInput.onchange = () => loadModels();
-
-    // Preenche a lista com os modelos permitidos no backend, para comparar pequeno e grande.
-    async function loadModels() {
-      try {
-        const res = await fetch("/admin/models", {
-          headers: { "x-admin-token": sessionStorage.getItem("adminToken") || "" },
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        (data.models || []).forEach(rememberModel);
-      } catch {
-        // sem lista, o envio usa o modelo padrão
-      }
-    }
-    if (tokenInput.value) loadModels();
-
-    function fileName(uri) {
-      return (uri || "").split("/").pop() || uri || "";
-    }
-
-    async function readError(res) {
-      if (res.status === 401) return "token inválido";
-      if (res.status === 429) return "limite do Bedrock, tente de novo em alguns segundos";
-      try {
-        const body = await res.json();
-        if (typeof body.detail === "string") return body.detail;
-        return JSON.stringify(body.detail || body);
-      } catch {
-        return `Erro (${res.status})`;
-      }
-    }
+    const tokenInput = document.getElementById('token');
+    const questionInput = document.getElementById('question');
+    const modelSelect = document.getElementById('model');
+    const statusEl = document.getElementById('status');
+    const modelStatus = document.getElementById('model-status');
+    const answerSection = document.getElementById('answer-section');
+    const sourcesEl = document.getElementById('sources');
+    const searchSection = document.getElementById('search-section');
+    const resultsEl = document.getElementById('results');
+    const askButton = document.getElementById('ask');
+    const searchButton = document.getElementById('search');
+    const form = document.getElementById('question-form');
+    let busy = false;
+    let modelsVersion = 0;
+    tokenInput.value = sessionStorage.getItem('adminToken') || '';
+    const getToken = () => sessionStorage.getItem('adminToken') || '';
+    const documents = Demo.docs(getToken);
+    tokenInput.oninput = () => {
+      sessionStorage.setItem('adminToken', tokenInput.value);
+      documents.tokenChanged();
+      answerSection.hidden = true;
+      searchSection.hidden = true;
+      Demo.status(statusEl, 'Faça uma pergunta para começar.');
+      loadModels();
+    };
 
     function rememberModel(modelArn) {
-      if (!modelArn) return;
-      const exists = Array.from(modelSelect.options).some((opt) => opt.value === modelArn);
-      if (!exists) {
-        const opt = document.createElement("option");
-        opt.value = modelArn;
-        opt.textContent = modelArn;
-        modelSelect.appendChild(opt);
+      if (!modelArn || Array.from(modelSelect.options).some((option) => option.value === modelArn)) return;
+      const option = Demo.element('option', modelArn);
+      option.value = modelArn;
+      modelSelect.append(option);
+    }
+
+    async function loadModels() {
+      const version = ++modelsVersion;
+      const token = getToken();
+      const defaultOption = Demo.element('option', 'Padrão');
+      defaultOption.value = '';
+      modelSelect.replaceChildren(defaultOption);
+      modelSelect.disabled = busy;
+      if (!token) { Demo.status(modelStatus, ''); return; }
+      modelSelect.disabled = true;
+      Demo.status(modelStatus, 'Carregando modelos...', 'loading');
+      try {
+        const res = await fetch('/admin/models', { headers: Demo.headers(token) });
+        if (!res.ok) throw new Error(await Demo.readError(res));
+        const data = await res.json();
+        if (version !== modelsVersion || token !== getToken()) return;
+        (data.models || []).forEach(rememberModel);
+        Demo.status(modelStatus, '');
+      } catch (error) {
+        if (version === modelsVersion && token === getToken()) {
+          Demo.status(modelStatus, `Não foi possível listar os modelos: ${error.message}. O envio usa o modelo padrão.`, 'warning');
+        }
+      } finally {
+        if (version === modelsVersion) modelSelect.disabled = busy;
       }
     }
 
-    document.getElementById("ask").onclick = async () => {
-      statusEl.textContent = "Consultando...";
-      const payload = { question: questionInput.value };
-      if (modelSelect.value) payload.model = modelSelect.value;
-      try {
-        const res = await fetch("/ask", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-admin-token": sessionStorage.getItem("adminToken") || "",
-          },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) {
-          statusEl.textContent = await readError(res);
-          return;
-        }
-        const data = await res.json();
-        statusEl.textContent = "";
-        rememberModel(data.model);
-        answerEl.textContent = data.answer;
-        metaEl.textContent = `Modelo: ${data.model} | Latência: ${data.latency_ms} ms`;
-        sourcesEl.replaceChildren();
-        (data.sources || []).forEach((src) => {
-          const li = document.createElement("li");
-          const strong = document.createElement("strong");
-          strong.textContent = fileName(src.uri) + ": ";
-          const span = document.createElement("span");
-          span.textContent = src.excerpt;
-          li.append(strong, span);
-          sourcesEl.appendChild(li);
-        });
-        answerSection.hidden = false;
-      } catch {
-        statusEl.textContent = "Falha de rede ao consultar.";
-      }
-    };
+    function sourceCard(uri, excerpt) {
+      const row = Demo.element('li', undefined, 'source-card');
+      row.append(Demo.element('strong', documents.sourceName(uri)), Demo.element('p', excerpt));
+      return row;
+    }
 
-    document.getElementById("search").onclick = async () => {
-      statusEl.textContent = "Buscando trechos...";
+    function showAnswer(data) {
+      const neutral = data.answer.trim() === 'Não encontrei essa informação nos documentos enviados.';
+      rememberModel(data.model);
+      document.getElementById('answer').textContent = data.answer;
+      document.getElementById('meta').textContent = `Modelo: ${data.model} | Latência: ${data.latency_ms} ms`;
+      answerSection.classList.toggle('neutral', neutral);
+      sourcesEl.replaceChildren();
+      const sources = neutral ? [] : data.sources || [];
+      sources.forEach((source) => sourcesEl.append(sourceCard(source.uri, source.excerpt)));
+      document.getElementById('sources-block').hidden = !sources.length;
+      answerSection.hidden = false;
+    }
+
+    function showSearch(data) {
+      resultsEl.replaceChildren();
+      const results = data.results || [];
+      if (!results.length) resultsEl.append(Demo.element('li', 'Nenhum trecho encontrado nos documentos.', 'empty'));
+      results.forEach((item) => {
+        const row = sourceCard(item.uri, item.text);
+        const value = Math.max(0, Math.min(1, Number(item.score) || 0));
+        const score = Demo.element('div', undefined, 'score');
+        const bar = Demo.element('progress');
+        bar.max = 1;
+        bar.value = value;
+        bar.setAttribute('aria-label', `Score: ${value.toFixed(2)}`);
+        score.append(bar, Demo.element('span', value.toFixed(2)));
+        row.append(score);
+        resultsEl.append(row);
+      });
+      searchSection.hidden = false;
+    }
+
+    async function query(searchOnly) {
+      if (busy || !form.reportValidity()) return;
+      const token = getToken();
+      busy = true;
+      askButton.disabled = searchButton.disabled = modelSelect.disabled = true;
+      answerSection.hidden = true;
+      searchSection.hidden = true;
+      Demo.status(statusEl, searchOnly ? 'Buscando trechos...' : 'Consultando...', 'loading');
+      const payload = { question: questionInput.value };
+      if (searchOnly) payload.top_k = 5;
+      else if (modelSelect.value) payload.model = modelSelect.value;
       try {
-        const res = await fetch("/search", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-admin-token": sessionStorage.getItem("adminToken") || "",
-          },
-          body: JSON.stringify({ question: questionInput.value, top_k: 5 }),
+        const res = await fetch(searchOnly ? '/search' : '/ask', {
+          method: 'POST', headers: Demo.headers(token, true), body: JSON.stringify(payload),
         });
-        if (!res.ok) {
-          statusEl.textContent = await readError(res);
-          return;
-        }
+        if (!res.ok) throw new Error(await Demo.readError(res));
         const data = await res.json();
-        statusEl.textContent = "";
-        resultsEl.replaceChildren();
-        (data.results || []).forEach((item) => {
-          const li = document.createElement("li");
-          const score = Number(item.score || 0).toFixed(2);
-          const header = document.createElement("strong");
-          header.textContent = `[${score}] ${fileName(item.uri)}: `;
-          const text = document.createElement("span");
-          text.textContent = item.text;
-          li.append(header, text);
-          resultsEl.appendChild(li);
-        });
-        searchSection.hidden = false;
-      } catch {
-        statusEl.textContent = "Falha de rede ao buscar.";
+        if (token !== getToken()) return;
+        if (searchOnly) showSearch(data);
+        else showAnswer(data);
+        Demo.status(statusEl, searchOnly ? 'Busca concluída.' : 'Resposta recebida.', 'success');
+      } catch (error) {
+        if (token === getToken()) Demo.status(statusEl, error instanceof TypeError
+          ? (searchOnly ? 'Falha de rede ao buscar.' : 'Falha de rede ao consultar.')
+          : error.message, 'error');
+      } finally {
+        busy = false;
+        askButton.disabled = searchButton.disabled = modelSelect.disabled = false;
       }
-    };
+    }
+
+    form.onsubmit = (event) => { event.preventDefault(); query(false); };
+    searchButton.onclick = () => query(true);
+    if (tokenInput.value) loadModels();
   </script>
 </body>
 </html>
