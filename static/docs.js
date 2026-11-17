@@ -45,7 +45,19 @@ const Demo = (() => {
     const date = new Date(item.last_modified);
     const shortDate = Number.isNaN(date.getTime()) ? 'Data indisponível'
       : date.toLocaleDateString('pt-BR');
-    return `${size(item.size)} · ${shortDate}`;
+    return `${size(item.size)}, ${shortDate}`;
+  }
+
+  // Bolinha ao lado do token: verde quando o backend aceitou, vermelha quando recusou.
+  function tokenState(state) {
+    const dot = document.getElementById('token-dot');
+    if (dot) dot.dataset.state = state;
+  }
+
+  // "arn:...:foundation-model/amazon.nova-lite-v1:0" vira "Nova Lite".
+  function modelLabel(arn) {
+    const id = (arn || '').split('/').pop().replace(/^[a-z]+\./, '').replace(/-v\d.*$/, '');
+    return id ? id.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : 'Padrão';
   }
 
   function docs(getToken, onSync = () => {}) {
@@ -53,12 +65,14 @@ const Demo = (() => {
     panel.className = 'docs-panel';
     panel.open = !window.matchMedia('(max-width: 800px)').matches;
     const summary = element('summary', 'Documentos na base ');
-    const count = element('span', '(0)', 'count');
+    const count = element('span', '0', 'count');
     summary.append(count);
     const toolbar = element('div', undefined, 'docs-toolbar');
-    const refresh = element('button', 'Atualizar lista');
+    const refresh = element('button', '↻', 'icon');
     refresh.type = 'button';
-    toolbar.append(refresh);
+    refresh.title = 'Atualizar lista';
+    refresh.setAttribute('aria-label', 'Atualizar lista de documentos');
+    toolbar.append(element('p', 'Só estes entram nas respostas.', 'meta'), refresh);
     const message = element('p', undefined, 'status');
     message.setAttribute('role', 'status');
     const syncMessage = element('p', undefined, 'status');
@@ -80,22 +94,22 @@ const Demo = (() => {
 
     function render() {
       list.replaceChildren();
-      count.textContent = `(${items.length})`;
+      count.textContent = String(items.length);
       items.forEach((item) => {
         const row = element('li', undefined, 'doc-item');
         const heading = element('div', undefined, 'doc-heading');
-        const remove = element('button', '×', 'doc-delete');
+        const remove = element('button', '×', 'icon doc-delete');
         remove.type = 'button';
         remove.setAttribute('aria-label', `Excluir ${name(item)}`);
         heading.append(element('strong', name(item)), remove);
         const confirmation = element('div', undefined, 'confirmation');
         confirmation.hidden = true;
         const actions = element('div', undefined, 'actions');
-        const accept = element('button', 'Excluir', 'danger');
+        const accept = element('button', 'Excluir e sincronizar', 'danger');
         const cancel = element('button', 'Cancelar');
         accept.type = cancel.type = 'button';
         actions.append(accept, cancel);
-        confirmation.append(element('p', 'Excluir da base?'), actions);
+        confirmation.append(element('p', 'Tirar este documento da base?'), actions);
         remove.onclick = () => {
           confirmation.hidden = false;
           remove.hidden = true;
@@ -119,7 +133,8 @@ const Demo = (() => {
       if (!token) {
         items = [];
         render();
-        status(message, 'Informe o token para ver os documentos.', 'info');
+        tokenState('');
+        status(message, 'Informe o token no topo para ver os documentos.', 'info');
         return;
       }
       refresh.disabled = true;
@@ -131,9 +146,13 @@ const Demo = (() => {
         if (version !== loadVersion || token !== getToken()) return;
         items = data;
         render();
-        status(message, items.length ? 'Lista atualizada.' : 'Nenhum documento na base.', items.length ? 'success' : 'info');
+        status(message, items.length ? '' : 'Nenhum documento na base ainda.', 'info');
+        tokenState('ok');
       } catch (error) {
-        if (version === loadVersion && token === getToken()) status(message, error.message, 'error');
+        if (version === loadVersion && token === getToken()) {
+          status(message, error.message, 'error');
+          if (error.message === 'token inválido') tokenState('error');
+        }
       } finally {
         if (version === loadVersion) refresh.disabled = deleting;
       }
@@ -239,5 +258,5 @@ const Demo = (() => {
     return { load, startSync, tokenChanged, sourceName };
   }
 
-  return { element, status, headers, readError, name, size, metadata, docs };
+  return { element, status, headers, readError, name, size, metadata, docs, modelLabel, tokenState };
 })();

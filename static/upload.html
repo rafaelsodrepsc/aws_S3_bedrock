@@ -9,26 +9,22 @@
 <body class="upload-page">
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">↗</span> Do bucket à IA</div>
-    <span class="eyebrow">Minicurso ao vivo</span>
   </header>
   <main class="upload-main">
     <section class="card upload-card" aria-labelledby="title">
-      <p class="eyebrow">Participe do minicurso</p>
-      <h1 id="title">Envie seu PDF.</h1>
-      <p class="subtitle">Envie um documento para a base de conhecimento do minicurso.</p>
-      <div class="drop-zone" id="drop-zone">
-        <span class="pdf-mark" aria-hidden="true">PDF ↑</span>
-        <p>Solte seu PDF aqui ou</p>
-        <label class="file-picker" for="file">Escolher PDF</label>
+      <h1 id="title">Envie um PDF para a IA ler</h1>
+      <p class="lead">Ele vai para a base do minicurso, e depois você vê a IA responder com base nele.</p>
+      <label class="drop-zone" id="drop-zone" for="file">
+        <span class="drop-icon" aria-hidden="true">↑</span>
+        <strong>Toque para escolher o PDF</strong>
+        <span class="meta" id="file-help">ou arraste o arquivo para cá. Só PDF, até 5 MB.</span>
         <input type="file" id="file" accept="application/pdf,.pdf" aria-describedby="file-help file-details">
-        <p class="meta" id="file-help">Só PDF, até 5 MB por arquivo.</p>
-      </div>
-      <p id="file-details" class="file-details meta">Nenhum arquivo escolhido.</p>
-      <p class="notice">Seu documento entra na base depois da aprovação do apresentador.</p>
-      <button id="send" class="primary" disabled>Enviar documento</button>
+      </label>
+      <p id="file-details" class="file-details" aria-live="polite">Nenhum arquivo escolhido.</p>
+      <button id="send" class="primary" disabled>Enviar PDF</button>
       <p id="status" class="status" role="status" aria-live="polite"></p>
     </section>
-    <p class="footer-note">O apresentador revisa cada envio antes da sincronização.</p>
+    <p class="footer-note">O apresentador confere cada arquivo antes de ele entrar na base.</p>
   </main>
   <script>
     const statusEl = document.getElementById('status');
@@ -53,9 +49,10 @@
       selectedFile = file || null;
       sendButton.disabled = true;
       fileDetails.textContent = file
-        ? `${file.name} · ${(file.size / 1024 / (file.size >= 1048576 ? 1024 : 1)).toFixed(1)} ${file.size >= 1048576 ? 'MB' : 'KB'}`
+        ? `${file.name} (${(file.size / 1024 / (file.size >= 1048576 ? 1024 : 1)).toFixed(1)} ${file.size >= 1048576 ? 'MB' : 'KB'})`
         : 'Nenhum arquivo escolhido.';
-      if (!file) { showStatus('Escolha um PDF.', 'info'); return; }
+      fileDetails.classList.toggle('chosen', Boolean(file));
+      if (!file) { showStatus('', 'info'); return; }
       if (!file.name.toLowerCase().endsWith('.pdf')) {
         showStatus('Escolha um arquivo PDF.', 'error');
         return;
@@ -111,7 +108,8 @@
           selectedFile = null;
           fileInput.value = '';
           fileDetails.textContent = 'Nenhum arquivo escolhido.';
-          showStatus('Recebido! Ele entra na base depois da moderação.', 'success');
+          fileDetails.classList.remove('chosen');
+          showStatus('Recebido! Ele entra na base depois que o apresentador aprovar.', 'success');
         } else {
           showStatus(`O S3 recusou o envio (${up.status}): arquivo grande demais ou autorização expirada.`, 'error');
         }

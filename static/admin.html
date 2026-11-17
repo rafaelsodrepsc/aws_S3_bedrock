@@ -10,41 +10,48 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">↗</span> Do bucket à IA</div>
-    <nav aria-label="Navegação"><a href="/">Enviar PDF</a><a href="/admin" aria-current="page">Moderação</a><a href="/chat">Perguntas</a></nav>
+    <nav class="tabs" aria-label="Telas da demo"><a href="/">Enviar PDF</a><a href="/admin" aria-current="page">Moderação</a><a href="/chat">Perguntas</a></nav>
+    <div class="token-field">
+      <span class="token-dot" id="token-dot" aria-hidden="true"></span>
+      <label for="token">Token</label>
+      <input type="password" id="token" placeholder="Cole o token de administração" autocomplete="off" spellcheck="false">
+    </div>
   </header>
   <main class="workspace">
     <div class="page-heading">
-      <p class="eyebrow">Área do apresentador</p>
-      <h1>Moderação de documentos</h1>
-      <p class="subtitle">Confira os PDFs, aprove o conteúdo e sincronize a base da IA.</p>
-    </div>
-    <div class="token-row">
-      <label for="token">Token de administração</label>
-      <input type="password" id="token" placeholder="x-admin-token" autocomplete="off" spellcheck="false">
+      <div>
+        <h1>Moderação</h1>
+        <p>Confira cada PDF antes que ele chegue na IA.</p>
+      </div>
     </div>
     <div class="layout">
       <aside aria-label="Base de conhecimento"><details id="documents"></details></aside>
       <div class="content">
         <section class="card" aria-labelledby="pending-title">
-          <p class="eyebrow">01 · Revisar e aprovar</p>
-          <h2 id="pending-title">Documentos pendentes</h2>
-          <p class="meta">Abra o arquivo em Ver antes de aprovar. A lista fica oculta até você exibi-la.</p>
-          <div class="actions">
-            <button id="refresh">Atualizar</button>
-            <button id="show-list" aria-expanded="false" aria-controls="pending-list">Mostrar lista no telão</button>
+          <div class="card-head">
+            <span class="step" aria-hidden="true">1</span>
+            <h2 id="pending-title">Aprovar pendentes</h2>
+            <div class="actions">
+              <button id="refresh" type="button">Atualizar</button>
+              <button id="show-list" type="button" aria-expanded="false" aria-controls="pending-list">Mostrar lista</button>
+            </div>
           </div>
-          <p id="status" class="status" role="status">Informe o token para carregar os pendentes.</p>
-          <ul id="pending-list" hidden></ul>
+          <p class="meta">A lista fica escondida até você conferir. Abra o arquivo em Ver antes de aprovar.</p>
+          <p id="status" class="status" role="status">Informe o token no topo para carregar os pendentes.</p>
+          <ul id="pending-list" class="pending-list" hidden></ul>
         </section>
         <section class="card" aria-labelledby="sync-title">
-          <p class="eyebrow">02 · Atualizar a IA</p>
-          <h2 id="sync-title">Sincronização</h2>
-          <p class="meta">Sincronize depois das aprovações para incluir os documentos nas respostas.</p>
-          <button id="sync" class="primary">Sincronizar</button>
+          <div class="card-head">
+            <span class="step" aria-hidden="true">2</span>
+            <h2 id="sync-title">Sincronizar a base</h2>
+            <div class="actions"><button id="sync" type="button" class="primary">Sincronizar</button></div>
+          </div>
+          <p class="meta">Depois de aprovar ou excluir, sincronize para a IA ler os documentos novos.</p>
           <div id="sync-section" hidden>
-            <p id="sync-job" class="mono"></p>
             <p id="sync-status" class="status" role="status"></p>
-            <pre id="sync-details"></pre>
+            <dl id="sync-stats" class="sync-stats"></dl>
+            <p id="sync-job" class="mono"></p>
+            <ul id="sync-errors" class="sync-errors"></ul>
           </div>
         </section>
       </div>
@@ -63,12 +70,7 @@
     const documents = Demo.docs(getToken, (data, text, state) => {
       document.getElementById('sync-section').hidden = false;
       Demo.status(document.getElementById('sync-status'), text, state);
-      if (data) {
-        document.getElementById('sync-job').textContent = `Job: ${data.job_id}`;
-        document.getElementById('sync-details').textContent = JSON.stringify(
-          { statistics: data.statistics, failure_reasons: data.failure_reasons }, null, 2
-        );
-      }
+      if (data) showStats(data);
     });
     tokenInput.oninput = () => {
       sessionStorage.setItem('adminToken', tokenInput.value);
@@ -76,6 +78,27 @@
       document.getElementById('sync-section').hidden = true;
       loadPending();
     };
+
+    // Resumo do job em vez do JSON cru: é o que se lê em voz alta na demo.
+    function showStats(data) {
+      const stats = data.statistics || {};
+      const rows = [
+        ['Lidos', stats.numberOfDocumentsScanned], ['Novos', stats.numberOfNewDocumentsIndexed],
+        ['Alterados', stats.numberOfModifiedDocumentsIndexed], ['Removidos', stats.numberOfDocumentsDeleted],
+        ['Falhas', stats.numberOfDocumentsFailed],
+      ];
+      const list = document.getElementById('sync-stats');
+      list.replaceChildren(...rows.map(([label, value]) => {
+        const box = Demo.element('div');
+        box.append(Demo.element('dt', label), Demo.element('dd', String(value ?? 0)));
+        return box;
+      }));
+      list.hidden = !data.statistics;
+      document.getElementById('sync-job').textContent = data.job_id ? `Job ${data.job_id}` : '';
+      document.getElementById('sync-errors').replaceChildren(
+        ...(data.failure_reasons || []).map((reason) => Demo.element('li', reason))
+      );
+    }
 
     function lockPending(locked) {
       moderating = locked;
@@ -88,7 +111,7 @@
       const token = getToken();
       pendingList.replaceChildren();
       if (!token) {
-        Demo.status(statusEl, 'Informe o token para carregar os pendentes.');
+        Demo.status(statusEl, 'Informe o token no topo para carregar os pendentes.');
         return;
       }
       refreshButton.disabled = true;
@@ -98,10 +121,12 @@
         if (!res.ok) throw new Error(await Demo.readError(res));
         const items = await res.json();
         if (version !== pendingVersion || token !== getToken()) return;
-        Demo.status(statusEl, items.length ? `Pendentes carregados (${items.length}).` : 'Nenhum documento pendente.', items.length ? 'success' : 'info');
+        Demo.status(statusEl, items.length ? `${items.length} ${items.length === 1 ? 'arquivo esperando' : 'arquivos esperando'} aprovação.` : 'Nenhum arquivo esperando aprovação.', items.length ? 'success' : 'info');
         items.forEach((item) => {
           const row = Demo.element('li', undefined, 'pending-item');
-          row.append(Demo.element('strong', Demo.name(item)), Demo.element('p', item.key, 'mono'), Demo.element('p', Demo.metadata(item), 'meta'));
+          const info = Demo.element('div', undefined, 'pending-info');
+          info.append(Demo.element('strong', Demo.name(item)), Demo.element('p', `${Demo.metadata(item)}`, 'meta'), Demo.element('p', item.key, 'mono'));
+          row.append(info);
           const actions = Demo.element('div', undefined, 'actions');
           const view = Demo.element('button', 'Ver');
           const approve = Demo.element('button', 'Aprovar', 'primary');
@@ -174,7 +199,7 @@
     document.getElementById('show-list').onclick = (event) => {
       pendingList.hidden = !pendingList.hidden;
       event.currentTarget.setAttribute('aria-expanded', String(!pendingList.hidden));
-      event.currentTarget.textContent = pendingList.hidden ? 'Mostrar lista no telão' : 'Ocultar lista';
+      event.currentTarget.textContent = pendingList.hidden ? 'Mostrar lista' : 'Esconder lista';
     };
     syncButton.onclick = async () => {
       syncButton.disabled = true;

@@ -10,52 +10,53 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">↗</span> Do bucket à IA</div>
-    <nav aria-label="Navegação"><a href="/">Enviar PDF</a><a href="/admin">Moderação</a><a href="/chat" aria-current="page">Perguntas</a></nav>
+    <nav class="tabs" aria-label="Telas da demo"><a href="/">Enviar PDF</a><a href="/admin">Moderação</a><a href="/chat" aria-current="page">Perguntas</a></nav>
+    <div class="token-field">
+      <span class="token-dot" id="token-dot" aria-hidden="true"></span>
+      <label for="token">Token</label>
+      <input type="password" id="token" placeholder="Cole o token de administração" autocomplete="off" spellcheck="false">
+    </div>
   </header>
   <main class="workspace">
     <div class="page-heading">
-      <p class="eyebrow">Explore o conhecimento da turma</p>
-      <h1>Pergunte aos documentos.</h1>
-      <p class="subtitle">Da sua pergunta a uma resposta com fontes.</p>
-    </div>
-    <div class="token-row">
-      <label for="token">Token de administração</label>
-      <input type="password" id="token" placeholder="x-admin-token" autocomplete="off" spellcheck="false">
+      <div>
+        <h1>Pergunte aos documentos</h1>
+        <p>A resposta vem só do que está na base, com a fonte de cada trecho.</p>
+      </div>
+      <button id="telao" type="button" aria-pressed="false">Modo telão</button>
     </div>
     <div class="layout">
       <aside aria-label="Base de conhecimento"><details id="documents"></details></aside>
-      <div class="content chat-content">
-        <section class="card" aria-labelledby="question-title">
-          <h2 id="question-title">O que você quer descobrir?</h2>
-          <form id="question-form">
-            <label for="question">Sua pergunta</label>
-            <input type="text" id="question" class="question" placeholder="Digite sua pergunta..." minlength="3" maxlength="500" required>
-            <div class="actions">
-              <div class="model-field">
-                <label for="model">Modelo</label>
-                <select id="model"><option value="">Padrão</option></select>
-              </div>
-              <button id="ask" type="submit" class="primary">Perguntar</button>
-              <button id="search" type="button">Só a busca</button>
+      <div class="content">
+        <section class="card" aria-label="Pergunta">
+          <form id="question-form" class="ask-form">
+            <div class="question-field">
+              <label for="question">Sua pergunta</label>
+              <input type="text" id="question" class="question" placeholder="Ex.: Qual a nota mínima para passar?" minlength="3" maxlength="500" required>
             </div>
+            <div class="model-field">
+              <label for="model">Modelo</label>
+              <select id="model"><option value="">Padrão</option></select>
+            </div>
+            <button id="ask" type="submit" class="primary">Perguntar</button>
+            <button id="search" type="button">Só a busca</button>
           </form>
-          <p id="model-status" class="status meta" role="status"></p>
-          <p id="status" class="status" role="status">Faça uma pergunta para começar.</p>
+          <p id="model-status" class="status" role="status"></p>
+          <p id="status" class="status" role="status">Escreva uma pergunta sobre os PDFs da base.</p>
         </section>
         <section id="answer-section" class="card answer-card" aria-labelledby="answer-title" hidden>
-          <p class="eyebrow">Com base nos documentos</p>
           <h2 id="answer-title">Resposta</h2>
           <p id="answer" class="answer-text"></p>
-          <p id="meta" class="meta"></p>
-          <div id="sources-block">
+          <div id="meta" class="answer-meta"></div>
+          <div id="sources-block" class="sources">
             <h3>Fontes</h3>
             <ul id="sources"></ul>
           </div>
         </section>
         <section id="search-section" class="card" aria-labelledby="search-title" hidden>
-          <p class="eyebrow">Trechos encontrados</p>
-          <h2 id="search-title">Resultados da busca</h2>
-          <ul id="results"></ul>
+          <h2 id="search-title">Trechos que a busca encontrou</h2>
+          <p class="meta">É isto que o modelo recebe para escrever a resposta. O número é a semelhança com a pergunta.</p>
+          <ul id="results" class="sources"></ul>
         </section>
       </div>
     </div>
@@ -83,13 +84,13 @@
       documents.tokenChanged();
       answerSection.hidden = true;
       searchSection.hidden = true;
-      Demo.status(statusEl, 'Faça uma pergunta para começar.');
+      Demo.status(statusEl, 'Escreva uma pergunta sobre os PDFs da base.');
       loadModels();
     };
 
     function rememberModel(modelArn) {
       if (!modelArn || Array.from(modelSelect.options).some((option) => option.value === modelArn)) return;
-      const option = Demo.element('option', modelArn);
+      const option = Demo.element('option', Demo.modelLabel(modelArn));
       option.value = modelArn;
       modelSelect.append(option);
     }
@@ -130,7 +131,10 @@
       const neutral = data.answer.trim() === 'Não encontrei essa informação nos documentos enviados.';
       rememberModel(data.model);
       document.getElementById('answer').textContent = data.answer;
-      document.getElementById('meta').textContent = `Modelo: ${data.model} | Latência: ${data.latency_ms} ms`;
+      const seconds = (Number(data.latency_ms) / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+      document.getElementById('meta').replaceChildren(
+        Demo.element('span', Demo.modelLabel(data.model), 'chip'), Demo.element('span', `${seconds} s`, 'chip'),
+      );
       answerSection.classList.toggle('neutral', neutral);
       sourcesEl.replaceChildren();
       const sources = neutral ? [] : data.sources || [];
@@ -147,10 +151,12 @@
         const row = sourceCard(item.uri, item.text);
         const value = Math.max(0, Math.min(1, Number(item.score) || 0));
         const score = Demo.element('div', undefined, 'score');
-        const bar = Demo.element('progress');
-        bar.max = 1;
-        bar.value = value;
-        bar.setAttribute('aria-label', `Score: ${value.toFixed(2)}`);
+        const bar = Demo.element('div', undefined, 'score-bar');
+        const fill = Demo.element('span');
+        fill.style.width = `${Math.round(value * 100)}%`;
+        bar.append(fill);
+        bar.setAttribute('role', 'img');
+        bar.setAttribute('aria-label', `Semelhança ${value.toFixed(2)}`);
         score.append(bar, Demo.element('span', value.toFixed(2)));
         row.append(score);
         resultsEl.append(row);
@@ -188,6 +194,16 @@
         askButton.disabled = searchButton.disabled = modelSelect.disabled = false;
       }
     }
+
+    // Telão: esconde token e barra lateral e aumenta pergunta e resposta. Esc sai.
+    const telaoButton = document.getElementById('telao');
+    function setTelao(on) {
+      document.body.classList.toggle('telao', on);
+      telaoButton.setAttribute('aria-pressed', String(on));
+      telaoButton.textContent = on ? 'Sair do modo telão' : 'Modo telão';
+    }
+    telaoButton.onclick = () => setTelao(!document.body.classList.contains('telao'));
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setTelao(false); });
 
     form.onsubmit = (event) => { event.preventDefault(); query(false); };
     searchButton.onclick = () => query(true);
