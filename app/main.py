@@ -28,6 +28,27 @@ REVIEW_PREFIX = "revisao/"
 UUID_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 PENDING_KEY_PATTERN = rf"^pendentes/{UUID_PATTERN}\.pdf$"
 PDF_MAGIC = b"%PDF-"
+NOT_FOUND_ANSWER = "Não encontrei essa informação nos documentos enviados."
+# O prompt padrão do RetrieveAndGenerate é em inglês e o modelo responde em inglês quando
+# não acha nada. Este é uma tradução fiel dele: testado no Nova Lite, um prompt mais livre
+# fazia o modelo parar de citar. $output_format_instructions$ é o que gera as citações.
+PROMPT_TEMPLATE = f"""Você é um assistente que responde perguntas. Vou te dar um conjunto de \
+resultados de busca e a pergunta do usuário. Sua tarefa é responder usando apenas informações \
+dos resultados de busca. Se os resultados não tiverem informação que responda à pergunta, \
+responda exatamente: "{NOT_FOUND_ANSWER}" O usuário afirmar um fato não quer dizer que ele seja \
+verdadeiro: confira nos resultados de busca. Responda sempre em português do Brasil.
+
+Estes são os resultados de busca, em ordem numerada:
+<context>
+$search_results$
+</context>
+
+Esta é a pergunta do usuário:
+<question>
+$query$
+</question>
+
+$output_format_instructions$"""
 
 # Erros da AWS que têm um status HTTP mais útil que 502 para quem chama.
 STATUS_BY_AWS_CODE = {
@@ -357,15 +378,21 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
                     "knowledgeBaseConfiguration": {
                         "knowledgeBaseId": settings.kb_id,
                         "modelArn": model,
+                        "generationConfiguration": {
+                            "promptTemplate": {"textPromptTemplate": PROMPT_TEMPLATE},
+                        },
                     },
                 },
             )
         except (ClientError, BotoCoreError) as err:
             raise aws_failure("retrieve_and_generate", err) from err
 
+        answer = resp["output"]["text"]
         sources: list[dict] = []
         seen: set[str] = set()
-        for citation in resp.get("citations", []):
+        # Sem resposta, o trecho que vem junto não é fonte de nada e só confunde no telão.
+        citations = [] if answer.strip() == NOT_FOUND_ANSWER else resp.get("citations", [])
+        for citation in citations:
             for ref in citation.get("retrievedReferences", []):
                 uri = s3_uri(ref)
                 if uri and uri not in seen:
@@ -377,7 +404,7 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
             "latency_ms": latency_ms, "sources": len(sources), "model": model,
         }})
         return {
-            "answer": resp["output"]["text"],
+            "answer": answer,
             "sources": sources,
             "model": model,
             "latency_ms": latency_ms,

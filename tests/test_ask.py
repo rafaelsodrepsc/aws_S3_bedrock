@@ -1,3 +1,4 @@
+from app.main import NOT_FOUND_ANSWER, PROMPT_TEMPLATE
 from tests.conftest import MODEL_A, MODEL_B
 
 DOC = "s3://bucket-de-teste/docs/regimento.pdf"
@@ -24,7 +25,13 @@ def expected_rag_params(model):
         "input": {"text": "Qual o prazo de trancamento?"},
         "retrieveAndGenerateConfiguration": {
             "type": "KNOWLEDGE_BASE",
-            "knowledgeBaseConfiguration": {"knowledgeBaseId": "KB12345678", "modelArn": model},
+            "knowledgeBaseConfiguration": {
+                "knowledgeBaseId": "KB12345678",
+                "modelArn": model,
+                "generationConfiguration": {
+                    "promptTemplate": {"textPromptTemplate": PROMPT_TEMPLATE},
+                },
+            },
         },
     }
 
@@ -56,6 +63,12 @@ def test_ask_with_second_model(client, aws, admin):
     assert resp.json()["model"] == MODEL_B
 
 
+def test_prompt_keeps_placeholders_bedrock_needs():
+    for placeholder in ("$search_results$", "$query$", "$output_format_instructions$"):
+        assert placeholder in PROMPT_TEMPLATE
+    assert len(PROMPT_TEMPLATE) <= 4000
+
+
 def test_models_lists_allowlist_for_admin(client, admin):
     assert client.get("/admin/models").status_code == 401
     assert client.get("/admin/models", headers=admin).json() == {"models": [MODEL_A, MODEL_B]}
@@ -80,6 +93,17 @@ def test_ask_without_citations_returns_empty_sources(client, aws, admin):
 
     resp = client.post("/ask", json={"question": "Qual o prazo de trancamento?"}, headers=admin)
 
+    assert resp.json()["sources"] == []
+
+
+def test_ask_not_found_drops_the_unrelated_excerpt(client, aws, admin):
+    aws["runtime_stub"].add_response(
+        "retrieve_and_generate", rag_response(text=NOT_FOUND_ANSWER), expected_rag_params(MODEL_A)
+    )
+
+    resp = client.post("/ask", json={"question": "Qual o prazo de trancamento?"}, headers=admin)
+
+    assert resp.json()["answer"] == NOT_FOUND_ANSWER
     assert resp.json()["sources"] == []
 
 
