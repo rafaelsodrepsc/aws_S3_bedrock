@@ -45,6 +45,8 @@ Use um túnel com endereço fixo. O Quick Tunnel do Cloudflare muda de endereço
 - `/admin` lista os pendentes, abre cada PDF numa aba ("Ver") para você conferir, aprova ou rejeita, e dispara a sincronização. Só dá para aprovar depois de abrir o arquivo. A lista só aparece depois de clicar em "Mostrar lista", para você conferir antes de projetar.
 - `/chat` faz perguntas com fonte, mostra só a busca com os scores e, se a stack tiver um segundo modelo, troca entre os dois.
 
+`/admin` e `/chat` têm uma barra lateral com os documentos que estão na base, pelo nome original do arquivo. O "×" exclui o documento de `docs/` e dispara a sincronização para a base esquecer dele.
+
 As duas últimas pedem o `ADMIN_TOKEN`, que fica guardado só na aba do navegador.
 
 ## O que mais tem aqui
