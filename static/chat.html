@@ -43,6 +43,7 @@
             <button id="ask" type="submit" class="primary">Perguntar</button>
             <button id="search" type="button">Só a busca</button>
           </form>
+          <p id="sync-warning" class="status" role="status" hidden></p>
           <p id="model-status" class="status" role="status"></p>
           <p id="status" class="status" role="status">Escreva uma pergunta sobre os PDFs da base.</p>
         </section>
@@ -80,9 +81,16 @@
     let modelsVersion = 0;
     tokenInput.value = sessionStorage.getItem('adminToken') || '';
     const getToken = () => sessionStorage.getItem('adminToken') || '';
-    const documents = Demo.docs(getToken);
+    // Pergunta feita no meio do sync pode não achar o documento novo: avisa fora da barra
+    // lateral, que fica fechada no celular e some no modo telão.
+    const syncWarning = document.getElementById('sync-warning');
+    const documents = Demo.docs(getToken, (data, text, state) => {
+      syncWarning.hidden = state !== 'loading';
+      if (state === 'loading') Demo.status(syncWarning, text, 'warning');
+    });
     tokenInput.oninput = () => {
       sessionStorage.setItem('adminToken', tokenInput.value);
+      syncWarning.hidden = true;
       documents.tokenChanged();
       answerSection.hidden = true;
       searchSection.hidden = true;

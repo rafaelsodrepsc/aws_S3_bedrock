@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from tests.conftest import BUCKET
@@ -208,8 +210,8 @@ def test_start_sync(client, aws, admin):
             "dataSourceId": "DS12345678",
             "ingestionJobId": "JOB1234567",
             "status": "STARTING",
-            "startedAt": "2026-11-16T12:00:00Z",
-            "updatedAt": "2026-11-16T12:00:00Z",
+            "startedAt": datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC),
+            "updatedAt": datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC),
         }},
         {"knowledgeBaseId": "KB12345678", "dataSourceId": "DS12345678"},
     )
@@ -217,7 +219,9 @@ def test_start_sync(client, aws, admin):
     resp = client.post("/admin/sync", headers=admin)
 
     assert resp.status_code == 200
-    assert resp.json() == {"job_id": "JOB1234567", "status": "STARTING"}
+    assert resp.json() == {
+        "job_id": "JOB1234567", "status": "STARTING", "started_at": "2026-11-16T12:00:00+00:00"
+    }
 
 
 def test_sync_already_running_returns_409(client, aws, admin):
@@ -240,8 +244,8 @@ def test_sync_status(client, aws, admin):
             "ingestionJobId": "JOB1234567",
             "status": "COMPLETE",
             "statistics": {"numberOfNewDocumentsIndexed": 2},
-            "startedAt": "2026-11-16T12:00:00Z",
-            "updatedAt": "2026-11-16T12:01:00Z",
+            "startedAt": datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC),
+            "updatedAt": datetime(2026, 11, 16, 12, 1, 0, tzinfo=UTC),
         }},
         {"knowledgeBaseId": "KB12345678", "dataSourceId": "DS12345678",
          "ingestionJobId": "JOB1234567"},
@@ -297,3 +301,48 @@ def test_delete_doc_removes_only_that_document(client, aws, admin):
 @pytest.mark.parametrize("key", [PENDING, "docs/../pendentes/x.pdf", "docs/regimento.pdf", REVIEW])
 def test_delete_doc_accepts_only_document_keys(client, admin, key):
     assert client.post("/admin/docs/delete", json={"key": key}, headers=admin).status_code == 422
+
+
+def test_latest_sync_returns_newest_job(client, aws, admin):
+    # A página que acompanhava o sync pode ter sido fechada; ao abrir, retoma por aqui.
+    aws["admin_stub"].add_response(
+        "list_ingestion_jobs",
+        {"ingestionJobSummaries": [{
+            "knowledgeBaseId": "KB12345678",
+            "dataSourceId": "DS12345678",
+            "ingestionJobId": "JOB1234567",
+            "status": "IN_PROGRESS",
+            "statistics": {"numberOfDocumentsScanned": 1},
+            "startedAt": datetime(2026, 11, 21, 14, 25, 35, tzinfo=UTC),
+            "updatedAt": datetime(2026, 11, 21, 14, 26, 0, tzinfo=UTC),
+        }]},
+        {"knowledgeBaseId": "KB12345678", "dataSourceId": "DS12345678",
+         "sortBy": {"attribute": "STARTED_AT", "order": "DESCENDING"}, "maxResults": 1},
+    )
+
+    resp = client.get("/admin/sync/latest", headers=admin)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["job_id"] == "JOB1234567"
+    assert body["status"] == "IN_PROGRESS"
+    assert body["statistics"] == {"numberOfDocumentsScanned": 1}
+    assert body["started_at"].startswith("2026-11-21T14:25:35")
+
+
+def test_latest_sync_without_jobs_is_empty(client, aws, admin):
+    aws["admin_stub"].add_response(
+        "list_ingestion_jobs",
+        {"ingestionJobSummaries": []},
+        {"knowledgeBaseId": "KB12345678", "dataSourceId": "DS12345678",
+         "sortBy": {"attribute": "STARTED_AT", "order": "DESCENDING"}, "maxResults": 1},
+    )
+
+    resp = client.get("/admin/sync/latest", headers=admin)
+
+    assert resp.status_code == 200
+    assert resp.json() == {}
+
+
+def test_latest_sync_requires_token(client):
+    assert client.get("/admin/sync/latest").status_code == 401

@@ -163,11 +163,42 @@ const Demo = (() => {
       onSync(data, text, state);
     }
 
+    function syncText(data, done) {
+      if (!data.started_at) return `Sincronização: ${data.status}`;
+      const started = new Date(data.started_at);
+      if (done) {
+        const at = started.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        return `Sincronização: ${data.status} (iniciada às ${at})`;
+      }
+      const seconds = Math.max(0, Math.round((Date.now() - started) / 1000));
+      return `Sincronização: ${data.status} há ${seconds} s. Perguntas ainda podem não achar os documentos novos.`;
+    }
+
     function showSync(data) {
+      const done = ['COMPLETE', 'FAILED', 'STOPPED'].includes(data.status);
       const state = data.status === 'COMPLETE' ? 'success'
         : ['FAILED', 'STOPPED'].includes(data.status) ? 'error' : 'loading';
-      syncUpdate(data, `Sincronização: ${data.status}`, state);
-      return ['COMPLETE', 'FAILED', 'STOPPED'].includes(data.status);
+      syncUpdate(data, syncText(data, done), state);
+      return done;
+    }
+
+    // Quem acompanha o sync é esta página. Ao abrir, ao colar o token de novo ou ao trocar de
+    // página, pergunta pelo último sync e volta a acompanhar se ele ainda estiver rodando.
+    async function resume() {
+      const token = getToken();
+      if (!token || syncing) return;
+      const version = syncVersion;
+      try {
+        const res = await fetch('/admin/sync/latest', { headers: headers(token) });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (version !== syncVersion || token !== getToken() || !data.job_id) return;
+        const pollVersion = ++syncVersion;
+        syncing = !showSync(data);
+        if (syncing) pollTimer = setTimeout(() => poll(data.job_id, token, pollVersion), 3000);
+      } catch {
+        // Sem o último sync a página só deixa de mostrar o status; o resto segue funcionando.
+      }
     }
 
     async function poll(jobId, token, version) {
@@ -196,7 +227,8 @@ const Demo = (() => {
         const res = await fetch('/admin/sync', { method: 'POST', headers: headers(token) });
         if (version !== syncVersion || token !== getToken()) return;
         if (res.status === 409) {
-          syncUpdate(null, 'Já há uma sincronização em andamento. Sincronize de novo quando ela terminar.', 'warning');
+          syncUpdate(null, 'Já há uma sincronização em andamento. Acompanhando a que está rodando.', 'warning');
+          resume();
           return;
         }
         if (!res.ok) throw new Error(await readError(res));
@@ -245,6 +277,7 @@ const Demo = (() => {
       render();
       status(syncMessage, '');
       load();
+      resume();
     }
 
     function sourceName(uri) {
@@ -255,6 +288,7 @@ const Demo = (() => {
 
     refresh.onclick = load;
     load();
+    resume();
     return { load, startSync, tokenChanged, sourceName };
   }
 

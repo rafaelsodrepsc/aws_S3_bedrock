@@ -404,7 +404,32 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
         except (ClientError, BotoCoreError) as err:
             raise aws_failure("start_ingestion_job", err) from err
         log.info("ingestion_started", extra={"ctx": {"job_id": job["ingestionJobId"]}})
-        return {"job_id": job["ingestionJobId"], "status": job["status"]}
+        return {"job_id": job["ingestionJobId"], "status": job["status"],
+                "started_at": job["startedAt"].isoformat()}
+
+    # Antes de /admin/sync/{job_id}, senão "latest" vira um job_id.
+    @app.get("/admin/sync/latest")
+    def latest_sync(x_admin_token: str | None = Header(default=None)) -> dict:
+        # Quem acompanha o sync é a página: se ela foi trocada ou recarregada, retoma daqui.
+        require_admin(x_admin_token)
+        try:
+            jobs = kb_admin.list_ingestion_jobs(
+                knowledgeBaseId=settings.kb_id,
+                dataSourceId=settings.data_source_id,
+                sortBy={"attribute": "STARTED_AT", "order": "DESCENDING"},
+                maxResults=1,
+            )["ingestionJobSummaries"]
+        except (ClientError, BotoCoreError) as err:
+            raise aws_failure("list_ingestion_jobs", err) from err
+        if not jobs:
+            return {}
+        job = jobs[0]
+        return {
+            "job_id": job["ingestionJobId"],
+            "status": job["status"],
+            "statistics": job.get("statistics", {}),
+            "started_at": job["startedAt"].isoformat(),
+        }
 
     @app.get("/admin/sync/{job_id}")
     def sync_status(job_id: str, x_admin_token: str | None = Header(default=None)) -> dict:
@@ -421,6 +446,7 @@ def create_app(settings: Settings | None = None, clients: Clients | None = None)
             "status": job["status"],
             "statistics": job.get("statistics", {}),
             "failure_reasons": job.get("failureReasons", []),
+            "started_at": job["startedAt"].isoformat(),
         }
 
     @app.get("/admin/models")
