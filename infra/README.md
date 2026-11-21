@@ -39,9 +39,10 @@ uv run python scripts/env_from_stack.py nome-da-stack
 Copie a saída para `.env` e acrescente `ADMIN_TOKEN`, gerado por você com pelo
 menos 16 caracteres. O script precisa de `cloudformation:DescribeStacks` na
 stack; essa permissão pertence à identidade de configuração, não à policy do
-backend. O template cria os recursos AWS, e o backend roda separadamente.
+backend. O template cria os recursos AWS, e o backend roda separadamente, no notebook ou publicado pelo `scripts/deploy_web.sh`.
 
-Para apagar, pare o backend, espere qualquer ingestão terminar e esvazie o
+Para apagar, se você publicou o site, apague antes a stack `minicurso-web` e depois a
+`minicurso-waf`, em `us-east-1`. Pare o backend, espere qualquer ingestão terminar e esvazie o
 bucket indicado em `DocsBucket`, incluindo `pendentes/` e `docs/`, antes de
 usar **Delete stack** no CloudFormation. A exclusão da fonte remove os vetores;
 as dependências mantêm o índice e a role disponíveis até essa etapa acabar.
@@ -49,3 +50,14 @@ as dependências mantêm o índice e a role disponíveis até essa etapa acabar.
 O custo esperado para uma demo pequena é baixo e varia com armazenamento,
 requisições e tokens de embeddings e geração, conforme os preços de
 [S3](https://aws.amazon.com/s3/pricing/) e [Bedrock](https://aws.amazon.com/bedrock/pricing/).
+
+## Site: `web.yaml` e `waf.yaml`
+
+Os dois sobem pelo `scripts/deploy_web.sh`, não pelo console. O `web.yaml` cria a
+Lambda (Python 3.13, arm64), a URL dela fechada com `AWS_IAM`, o CloudFront com OAC
+e as permissões para só esse CloudFront chamar a função. O `waf.yaml` cria o WAF com
+a lista de IPs de má reputação da AWS e o limite de 10 mil pedidos por IP em 5
+minutos. Ele fica em `us-east-1` porque o WAF de um CloudFront só pode ser criado lá.
+
+O WAF custa uns US$ 7 por mês, mesmo sem tráfego. A Lambda e o CloudFront, numa
+demo, ficam no nível gratuito.
