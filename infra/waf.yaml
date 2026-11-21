@@ -1,0 +1,50 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: WAF do CloudFront da demo Do bucket à IA (precisa ficar em us-east-1)
+
+# A plateia costuma sair pelo mesmo IP da rede do evento. O limite cobre 300 pessoas nesse
+# IP (até 8 requisições cada, com recarga e dois envios) com folga de 4 vezes e ainda corta
+# quem dispara mais de 33 por segundo, o que ocupa no máximo uma vaga da Lambda.
+Resources:
+  WebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: do-bucket-a-ia
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: do-bucket-a-ia
+      Rules:
+        - Name: ip-reputation
+          Priority: 0
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: ip-reputation
+        - Name: rate-per-ip
+          Priority: 1
+          Action:
+            Block:
+              CustomResponse:
+                ResponseCode: 429
+          Statement:
+            RateBasedStatement:
+              AggregateKeyType: IP
+              EvaluationWindowSec: 300
+              Limit: 10000
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: rate-per-ip
+
+Outputs:
+  WebAclArn:
+    Value: !GetAtt WebAcl.Arn

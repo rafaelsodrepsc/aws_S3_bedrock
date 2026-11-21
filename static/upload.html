@@ -28,6 +28,7 @@
     </section>
     <p class="footer-note">O apresentador confere cada arquivo antes de ele entrar na base.</p>
   </main>
+  <script src="/static/signed-fetch.js"></script>
   <script>
     const statusEl = document.getElementById('status');
     const fileInput = document.getElementById('file');
@@ -64,7 +65,15 @@
       const params = new URLSearchParams(location.search);
       params.set('name', file.name);
       try {
-        const res = await fetch(`/upload-url?${params}`, { method: 'POST' });
+        // Com a sala inteira enviando junto, um pico pode devolver 429 ou 5xx por alguns
+        // segundos. Pedir de novo é seguro: cada pedido gera uma chave nova.
+        let res;
+        for (const wait of [0, 1000, 2500, 5000]) {
+          if (wait) await new Promise((resolve) => setTimeout(resolve, wait + Math.random() * 500));
+          if (version !== selection) return;
+          res = await fetch(`/upload-url?${params}`, { method: 'POST' });
+          if (res.status !== 429 && res.status < 500) break;
+        }
         if (!res.ok) throw new Error(`Falha ao pedir autorização (${res.status})`);
         const data = await res.json();
         if (version !== selection) return;

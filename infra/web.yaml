@@ -1,0 +1,180 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Backend da demo Do bucket à IA numa Lambda, atrás do CloudFront com WAF
+
+# Stack separada da principal: o CORS do bucket precisa da URL desta função, e a função
+# precisa do nome do bucket. Na mesma stack isso vira dependência circular.
+Parameters:
+  DocsBucket:
+    Type: String
+  KnowledgeBaseId:
+    Type: String
+  DataSourceId:
+    Type: String
+  ModelArns:
+    Type: String
+  BackendPolicyArn:
+    Type: String
+  AdminToken:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+  CodeKey:
+    Type: String
+    Description: Chave do zip do backend dentro do DocsBucket
+  WebAclArn:
+    Type: String
+    Description: Saída WebAclArn da stack do infra/waf.yaml (us-east-1)
+
+Resources:
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref BackendPolicyArn
+      Policies:
+        - PolicyName: logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt LogGroup.Arn
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/do-bucket-a-ia-web
+      RetentionInDays: 14
+
+  Function:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: do-bucket-a-ia-web
+      Runtime: python3.13
+      Architectures: [arm64]
+      Handler: app.lambda_handler.handler
+      MemorySize: 512
+      # O RetrieveAndGenerate leva alguns segundos; 30 dá folga sem prender pedido travado.
+      Timeout: 30
+      Role: !GetAtt FunctionRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref LogGroup
+      Code:
+        S3Bucket: !Ref DocsBucket
+        S3Key: !Ref CodeKey
+      Environment:
+        Variables:
+          DOCS_BUCKET: !Ref DocsBucket
+          KB_ID: !Ref KnowledgeBaseId
+          DATA_SOURCE_ID: !Ref DataSourceId
+          MODEL_ARNS: !Ref ModelArns
+          ADMIN_TOKEN: !Ref AdminToken
+          # Teto da sala inteira: 300 pessoas enviando no mesmo minuto ainda passam.
+          UPLOADS_PER_MINUTE: '600'
+
+  FunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt Function.Arn
+      # Só o CloudFront assina pedidos válidos (OAC). Acesso direto à URL volta 403 sem
+      # chegar a rodar a função, então não ocupa concorrência nem passa por fora do WAF.
+      AuthType: AWS_IAM
+
+  UrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunctionUrl
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+      FunctionUrlAuthType: AWS_IAM
+
+  InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunction
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+      InvokedViaFunctionUrl: true
+
+  OriginAccess:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: do-bucket-a-ia-web
+        OriginAccessControlOriginType: lambda
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Páginas e estáticos são iguais para todo mundo: 5 minutos no CloudFront, mesmo com o
+  # no-cache do app. Quem chega pelo QR quase não chega na Lambda. O deploy invalida o cache.
+  PagesCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: do-bucket-a-ia-pages
+        MinTTL: 300
+        DefaultTTL: 300
+        MaxTTL: 300
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          HeadersConfig:
+            HeaderBehavior: none
+          CookiesConfig:
+            CookieBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Do bucket à IA
+        HttpVersion: http2and3
+        PriceClass: PriceClass_All
+        WebACLId: !Ref WebAclArn
+        Origins:
+          - Id: lambda
+            DomainName: !Select [2, !Split ['/', !GetAtt FunctionUrl.FunctionUrl]]
+            OriginAccessControlId: !GetAtt OriginAccess.Id
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        # O CloudFront só guarda GET e HEAD: os POST (upload-url, ask, search) vão sempre à Lambda.
+        DefaultCacheBehavior:
+          TargetOriginId: lambda
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: !Ref PagesCachePolicy
+          # Managed-AllViewerExceptHostHeader: o Host tem que ser o da Function URL.
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+        CacheBehaviors:
+          # GETs do apresentador levam o token e dados que mudam: nunca vão para o cache.
+          - PathPattern: /admin/*
+            TargetOriginId: lambda
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            # Managed-CachingDisabled
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+
+Outputs:
+  DistributionId:
+    Value: !Ref Distribution
+  Origin:
+    Description: Valor de AllowedOrigin na stack principal
+    Value: !Sub https://${Distribution.DomainName}

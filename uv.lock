@@ -433,6 +433,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "boto3", extra = ["crt"] },
     { name = "fastapi" },
+    { name = "mangum" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -449,6 +450,7 @@ dev = [
 requires-dist = [
     { name = "boto3", extras = ["crt"], specifier = ">=1.44.3" },
     { name = "fastapi", specifier = ">=0.163.1" },
+    { name = "mangum", specifier = ">=0.22.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
 ]
 
@@ -648,6 +650,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/46/cb/2c3112a061a718d93866c2555dad1e9d53865e4703d0f3be550d252b277b/jsonpointer-3.12.tar.gz", hash = "sha256:7a3dcc11b64053eaa9c549e85e413f8d40a075215f793a331bed9182a14251ae", size = 23217, upload-time = "2026-11-11T09:34:22.894Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/72/07/3c953fceee478798f6bdf7b39e0da0793f437e8b5f9e9e1360fba32fb25c/jsonpointer-3.12-py3-none-any.whl", hash = "sha256:89f391335ee2719ae72149e1bf30a4d4c7c5d92f15a3f53faa8d20cc7c6c7f19", size = 10562, upload-time = "2026-11-11T09:34:21.711Z" },
+]
+
+[[package]]
+name = "mangum"
+version = "0.22.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/82/c8/1579c705908d02a4526a748e8d0f0419151d4498c59033840f5df3a14822/mangum-0.22.0.tar.gz", hash = "sha256:701936891aaed8ed66479b871c2bda87ba288fd01c7d5dd6ba6c8e9ba1c239d1", size = 118290, upload-time = "2026-08-22T12:54:48.396Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/a2/21ee5d457ae79a2587ff0d4652990670b7cac84ba0eaab6e6865a3bd2515/mangum-0.22.0-py3-none-any.whl", hash = "sha256:a0595e3cc7a8091b22d8b3997bab5b2ad6aae7a5e40865e19c2015f5c959a93b", size = 17143, upload-time = "2026-08-22T12:54:46.924Z" },
 ]
 
 [[package]]
