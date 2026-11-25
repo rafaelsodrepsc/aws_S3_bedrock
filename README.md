@@ -1,44 +1,45 @@
 # Do bucket à IA
 
-Código da demo do minicurso "Do bucket à IA com Amazon S3 e Amazon Bedrock", apresentado por Rafael Sodré e João Aguiar.
+Código da demo do minicurso "Do bucket à IA com Amazon S3 e Amazon Bedrock", de Rafael Sodré e João Aguiar, na UEPB, em novembro de 2026.
 
-A plateia envia PDFs pelo celular direto para um bucket S3. O apresentador aprova os arquivos, sincroniza uma Bedrock Knowledge Base e faz perguntas que voltam com a fonte. O backend nunca recebe o arquivo: ele só assina a autorização de upload e chama o Bedrock.
+A turma envia PDFs pelo celular direto para um bucket S3. Os arquivos aprovados são sincronizados com uma Knowledge Base do Bedrock, que responde perguntas sobre eles e indica a fonte. O arquivo não passa pelo backend, que só assina a autorização do envio.
 
-## Rodar os testes
+## Testes
 
-Não precisa de conta AWS. O S3 é simulado com moto e o Bedrock com `botocore.stub.Stubber`.
+O S3 e o Bedrock são simulados, então não precisa de conta na AWS.
 
 ```sh
 uv sync
 uv run pytest -q
 ```
 
-## Subir a demo na sua conta
+## Subindo na sua conta
 
-Antes de tudo, crie um alerta no AWS Budgets. A demo custa pouco, mas recurso esquecido ligado é o susto mais comum.
+Crie um alerta no AWS Budgets antes. O WAF custa cerca de US$ 7 por mês mesmo sem tráfego.
 
-1. Suba `infra/stack.yaml` pelo console do CloudFormation, na região do seu projeto. O passo a passo e os parâmetros estão em `infra/README.md`.
-2. Gere o `.env`. Se você entra com `aws login`, informe o perfil e a região:
+Primeiro suba `infra/stack.yaml` pelo console do CloudFormation, na região do seu projeto. Os parâmetros estão explicados em `infra/README.md`.
 
-   ```sh
-   export AWS_PROFILE=seu-perfil AWS_REGION=sua-regiao
-   uv run python scripts/env_from_stack.py nome-da-stack > .env
-   echo "ADMIN_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> .env
-   ```
+Depois gere o `.env` (aqui usando `aws login`):
 
-3. Publique o site:
+```sh
+export AWS_PROFILE=seu-perfil AWS_REGION=sua-regiao
+uv run python scripts/env_from_stack.py nome-da-stack > .env
+echo "ADMIN_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> .env
+```
 
-   ```sh
-   AWS_PROFILE=seu-perfil scripts/deploy_web.sh
-   ```
+E publique o site:
 
-   O script sobe o WAF na stack `minicurso-waf`, em `us-east-1`, porque o WAF de um CloudFront só pode ficar lá. Depois sobe a Lambda com o CloudFront na stack `minicurso-web` e troca o `AllowedOrigin` da stack principal pelo endereço do CloudFront. No fim, imprime o endereço do site. O `ADMIN_TOKEN` vem do `.env`, e os nomes das stacks mudam com `MAIN_STACK`, `WEB_STACK` e `WAF_STACK`.
+```sh
+AWS_PROFILE=seu-perfil scripts/deploy_web.sh
+```
 
-`scripts/site.sh off` desliga a Lambda na hora e `scripts/site.sh on` liga de novo. Serve para cortar abuso sem apagar nada.
+Isso cria a stack `minicurso-waf` (em `us-east-1`, porque o WAF do CloudFront só funciona lá) e a `minicurso-web`, com a Lambda e o CloudFront. Também troca o `AllowedOrigin` da stack principal pelo endereço do site, que aparece no final. Se quiser outros nomes de stack, use `MAIN_STACK`, `WEB_STACK` e `WAF_STACK`.
 
-### Rodar no notebook
+Se alguém abusar do site, `scripts/site.sh off` desliga a Lambda na hora e `scripts/site.sh on` liga de novo.
 
-Serve para desenvolver. Associe a policy do output `BackendPolicyArn` à identidade que vai rodar o backend e suba o servidor:
+## Rodando no notebook
+
+A identidade que roda o backend precisa da policy que sai no output `BackendPolicyArn`.
 
 ```sh
 set -a && source .env && set +a
@@ -46,39 +47,44 @@ export AWS_PROFILE=seu-perfil
 uv run uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
-Para o upload funcionar, o `AllowedOrigin` da stack precisa ser a origem da página, como `http://localhost:8000` ou a URL HTTPS de um túnel. Depois de um `deploy_web.sh` ele aponta para o CloudFront, então troque de volta antes de testar o upload local. `/admin` e `/chat` não dependem do CORS.
+Para testar o upload, o `AllowedOrigin` da stack precisa ser o endereço que você abre no navegador, como `http://localhost:8000`. Depois de um `deploy_web.sh` ele aponta para o CloudFront, então troque de volta. O `/admin` e o `/chat` funcionam sem isso.
 
-Num túnel, use um endereço fixo. O Quick Tunnel do Cloudflare muda de endereço a cada execução e quebra o QR code e o CORS. O túnel conecta localmente, então o backend não precisa escutar na rede. Isso também importa para o `CLIENT_IP_HEADER`: o header só é confiável se ninguém alcançar a porta 8000 sem passar pelo Cloudflare.
+Se usar um túnel, escolha um com endereço fixo. O Quick Tunnel do Cloudflare muda a cada execução e quebra o QR code e o CORS. Com o túnel nomeado, `CLIENT_IP_HEADER=cf-connecting-ip` limita os envios por pessoa, desde que ninguém alcance a porta 8000 por fora dele.
 
-## Páginas
+## Telas
 
-- `/` recebe o PDF (até 5 MB). É o endereço do QR code. Com `?ttl=10` dá para mostrar a autorização expirando.
-- `/admin` lista os pendentes, abre cada PDF numa aba ("Ver") para você conferir, aprova ou rejeita, e dispara a sincronização. Só dá para aprovar depois de abrir o arquivo. A lista só aparece depois de clicar em "Mostrar lista", para você conferir antes de projetar.
-- `/chat` faz perguntas com fonte, mostra só a busca com os scores e, se a stack tiver um segundo modelo, troca entre os dois.
+`/` é a página do QR code, onde se envia o PDF de até 5 MB. Com `/?ttl=10` a autorização vence em 10 segundos, para demonstrar o erro de expiração.
 
-`/admin` e `/chat` têm uma barra lateral com os documentos que estão na base, pelo nome original do arquivo. O "×" exclui o documento de `docs/` e dispara a sincronização para a base esquecer dele.
+`/admin` é a tela de moderação e de sincronização. A lista de pendentes começa escondida, para não aparecer no telão, e um arquivo só pode ser aprovado depois de aberto em "Ver".
 
-As duas últimas pedem o `ADMIN_TOKEN`, que fica guardado só na aba do navegador.
+`/chat` responde com a fonte. O "Só a busca" mostra os trechos e os scores, sem o modelo escrever nada. Se a stack tiver um segundo modelo, dá para trocar entre os dois.
 
-O status da sincronização mostra há quanto tempo ela roda. Se você trocar de página ou recarregar, `/admin` e `/chat` retomam o acompanhamento, e o `/chat` avisa enquanto a base está sendo atualizada: uma pergunta feita nesse meio-tempo pode não achar o documento novo.
+O `/admin` e o `/chat` pedem o `ADMIN_TOKEN`, que fica só na aba do navegador. Na lateral aparecem os documentos aprovados, e o "×" exclui um deles e já sincroniza. Enquanto a sincronização roda, uma pergunta pode não achar o documento novo, e o `/chat` avisa.
 
-## O que mais tem aqui
+## Decisões
 
-- `eval/`: mede se a busca acha o arquivo certo (acerto em k e MRR). Copie `eval/perguntas.example.json`, escreva suas perguntas e rode `uv run python -m eval.run --kb-id SEU_KB --region SUA_REGIAO --arquivo eval/perguntas.json`. A `fonte_esperada` é o nome do arquivo dentro de `docs/`; os PDFs aprovados pela demo ficam com o nome do UUID gerado no upload.
-- `lambda/auto_sync/`: Lambda que sincroniza a Knowledge Base quando um arquivo entra ou sai de `docs/`. É o passo seguinte da demo, que sincroniza na mão.
+O upload usa POST assinado porque ele aceita condições que o S3 confere antes de gravar: a chave, o tipo e o tamanho. O PUT assinado não limita o tamanho. A chave é gerada no servidor e sempre cai em `pendentes/`. Como a Knowledge Base só lê `docs/`, nada entra sem aprovação.
 
-## Decisões que valem saber
+O S3 só olha o `Content-Type` declarado, então o "Ver" lê o começo do arquivo e recusa o que não começa com `%PDF-`. Ele também guarda uma cópia em `revisao/`, e é ela que a aprovação publica. A autorização de envio ainda vale por alguns minutos, e sem a cópia o arquivo poderia ser trocado depois da conferência. O que sobra em `pendentes/` e `revisao/` é apagado depois de um dia.
 
-- O upload usa POST assinado, e não PUT, porque a policy do POST aceita condições de tipo, tamanho e chave que o S3 confere antes de gravar.
-- A chave do arquivo é gerada no servidor, em `pendentes/`. A Knowledge Base só lê `docs/`, então nada entra na base sem aprovação.
-- O S3 só confere o `Content-Type` declarado. Por isso, ao abrir um arquivo para conferir, o backend lê os primeiros bytes e recusa o que não começa com `%PDF-`.
-- A autorização de upload continua valendo por alguns minutos, então quem enviou poderia trocar o arquivo depois que você conferiu. Por isso "Ver" guarda uma cópia em `revisao/`, onde a autorização não grava, e a aprovação publica essa cópia.
-- Há um teto de autorizações por minuto para todo mundo. No site, o limite por IP fica no WAF, em 10 mil pedidos a cada 5 minutos, porque a plateia costuma sair pelo mesmo IP do Wi-Fi do evento e atrás do CloudFront o IP que chega à Lambda é o dele. No túnel, `CLIENT_IP_HEADER=cf-connecting-ip` liga um limite por pessoa no próprio app.
-- A URL da Lambda usa `AWS_IAM`, e só o CloudFront assina pedidos para ela (OAC). Um acesso direto volta 403 sem rodar a função, então não ocupa concorrência nem passa por fora do WAF. Com OAC, o CloudFront exige o SHA-256 do corpo nos POST; o `static/signed-fetch.js` calcula e envia o header `x-amz-content-sha256`.
-- O CloudFront guarda as páginas e os estáticos por 5 minutos e nunca guarda `/admin/*`, onde estão os GET que pedem token. O deploy invalida o cache.
-- O lifecycle do bucket apaga `pendentes/` e `revisao/` depois de um dia.
-- O `/ask` usa um prompt em português, traduzido do padrão do Bedrock. Com o padrão em inglês, o modelo respondia em inglês quando não achava a resposta.
+O limite por IP fica no WAF e é alto (10 mil pedidos em 5 minutos), porque a turma inteira costuma sair pelo mesmo IP do Wi-Fi. No app fica um teto de autorizações por minuto, contado em cada instância da Lambda.
 
-## Apagar tudo
+A URL da Lambda só aceita pedidos assinados pelo CloudFront, então não há acesso por fora do WAF. Por isso os POST precisam levar o SHA-256 do corpo, calculado em `static/signed-fetch.js`. O CloudFront guarda as páginas por 5 minutos e nunca guarda `/admin/*`.
 
-Apague a stack `minicurso-web` e depois a `minicurso-waf`, em `us-east-1`. O WAF cobra uns US$ 7 por mês mesmo sem tráfego. Depois esvazie o bucket do output `DocsBucket` e apague a stack principal. Confira o Cost Explorer no dia seguinte.
+O prompt do `/ask` é uma tradução do padrão do Bedrock. Com o original, o modelo respondia em inglês quando não achava a resposta.
+
+## Outras pastas
+
+`eval/` mede se a busca acha o arquivo certo. Copie `eval/perguntas.example.json`, escreva suas perguntas e rode:
+
+```sh
+uv run python -m eval.run --kb-id SEU_KB --region SUA_REGIAO --arquivo eval/perguntas.json
+```
+
+Em `fonte_esperada` vai o nome do arquivo em `docs/`, que nos PDFs aprovados pela demo é o UUID gerado no upload.
+
+`lambda/auto_sync/` sincroniza sozinha quando um arquivo entra ou sai de `docs/`. Na aula a sincronização é manual.
+
+## Apagando tudo
+
+Apague a stack `minicurso-web` e depois a `minicurso-waf`, em `us-east-1`. Esvazie o bucket do output `DocsBucket`, apague a stack principal e confira o Cost Explorer no dia seguinte.
